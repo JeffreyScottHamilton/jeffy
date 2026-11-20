@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/server/gemini", () => ({ generateReply: vi.fn(), GEMINI_MODEL: "x" }));
 vi.mock("@/lib/server/voicestudio", () => ({ synthesize: vi.fn() }));
+vi.mock("@/lib/server/gradium", () => ({ synthesizeGradium: vi.fn() }));
 
 import { RateLimitError, VoiceOfflineError, VoiceTimeoutError } from "@/lib/server/errors";
 import { generateReply } from "@/lib/server/gemini";
+import { synthesizeGradium } from "@/lib/server/gradium";
 import { synthesize } from "@/lib/server/voicestudio";
 import { POST } from "./route";
 
@@ -103,6 +105,19 @@ describe("POST /api/chat", () => {
     expect(vi.mocked(synthesize).mock.calls[0][0]).toBe("Black and strong, no big deal.");
     const prompt = vi.mocked(generateReply).mock.calls[0][0];
     expect(prompt.contents).toHaveLength(3);
+  });
+  it("uses gradium when configured", async () => {
+    vi.stubEnv("VOICE_PROVIDER", "gradium");
+    vi.stubEnv("GRADIUM_API_KEY", "gsk-secret");
+    vi.stubEnv("GRADIUM_VOICE_ID", "voice1");
+    vi.mocked(synthesizeGradium).mockResolvedValue({ audio: new Uint8Array([1, 2]).buffer, contentType: "audio/wav" });
+    const r = await post({ question: QUESTION });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toBe("audio/wav");
+    expect(new Uint8Array(await r.arrayBuffer())).toEqual(new Uint8Array([1, 2]));
+    expect(vi.mocked(synthesizeGradium).mock.calls[0][0]).toBe("Black and strong, no big deal.");
+    expect(vi.mocked(synthesizeGradium).mock.calls[0][1]).toMatchObject({ apiKey: "gsk-secret", voiceId: "voice1" });
+    expect(synthesize).not.toHaveBeenCalled();
   });
   it("console.error never contains question text or keys", async () => {
     vi.mocked(generateReply).mockRejectedValueOnce(new Error(`${QUESTION} ${KEY}`));

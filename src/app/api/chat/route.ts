@@ -11,6 +11,7 @@ import { JeffyError } from "@/lib/server/errors";
 import { generateReply } from "@/lib/server/gemini";
 import { loadProfile, ProfileError, selectRelevant } from "@/lib/server/profile";
 import { buildPrompt, type Turn } from "@/lib/server/prompt";
+import { synthesizeGradium } from "@/lib/server/gradium";
 import { synthesize } from "@/lib/server/voicestudio";
 
 export const maxDuration = 60;
@@ -28,8 +29,9 @@ const MESSAGES: Record<ErrorCode, string> = {
   voice_offline: "Jeffy's voice service is offline. Try again when it's back.",
   voice_timeout: "Jeffy's voice took too long to answer. Try again.",
   voice_busy: "Jeffy's voice service is busy. Try again in a moment.",
-  voice_auth: "VoiceStudio rejected Jeffy's credentials. Check VOICESTUDIO_AUTH_TOKEN.",
-  voice_config: "Jeffy's voice isn't set up correctly. Check VOICESTUDIO_VOICE_ID.",
+  voice_auth: "The voice service rejected Jeffy's credentials. Check the voice API key or token.",
+  voice_config: "Jeffy's voice isn't set up correctly. Check the voice id (GRADIUM_VOICE_ID or VOICESTUDIO_VOICE_ID).",
+  voice_quota: "The free voice allowance is used up for this month.",
   internal: "Something went wrong. Try again.",
 };
 
@@ -127,7 +129,10 @@ export async function POST(request: Request): Promise<Response> {
       apiKey: cfg.config.geminiApiKey,
       timeoutMs: cfg.config.geminiTimeoutMs,
     });
-    const { audio, contentType } = await synthesize(reply, cfg.config.voicestudio);
+    const { audio, contentType } =
+      cfg.config.voiceProvider === "gradium"
+        ? await synthesizeGradium(reply, cfg.config.gradium)
+        : await synthesize(reply, cfg.config.voicestudio);
 
     return new Response(audio, {
       status: 200,

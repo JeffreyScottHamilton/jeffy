@@ -8,9 +8,13 @@ export type VoiceStudioConfig = {
   responseFormat: "wav" | "mp3";
   timeoutMs: number;
 };
+export type GradiumConfig = { apiKey: string; voiceId: string; timeoutMs: number };
+export type VoiceProvider = "gradium" | "voicestudio";
 export type JeffyConfig = {
   geminiApiKey: string;
+  voiceProvider: VoiceProvider;
   voicestudio: VoiceStudioConfig;
+  gradium: GradiumConfig;
   geminiTimeoutMs: number;
 };
 
@@ -29,36 +33,50 @@ export function readConfig(
   const problems: string[] = [];
 
   const geminiApiKey = get("GOOGLE_GENERATIVE_AI_API_KEY");
+  if (!geminiApiKey) missing.push("GOOGLE_GENERATIVE_AI_API_KEY");
+
+  const rawProvider = get("VOICE_PROVIDER")?.toLowerCase();
+  let provider: VoiceProvider = get("GRADIUM_API_KEY") ? "gradium" : "voicestudio";
+  if (rawProvider === "gradium" || rawProvider === "voicestudio") provider = rawProvider;
+  else if (rawProvider) problems.push("VOICE_PROVIDER must be gradium or voicestudio");
+
+  const timeoutMs = num(get("VOICE_TIMEOUT_MS") ?? get("VOICESTUDIO_TIMEOUT_MS"), 40000);
+  const gradiumApiKey = get("GRADIUM_API_KEY");
+  const gradiumVoiceId = get("GRADIUM_VOICE_ID");
   const rawBase = get("VOICESTUDIO_BASE_URL");
   const voiceId = get("VOICESTUDIO_VOICE_ID");
   const authToken = get("VOICESTUDIO_AUTH_TOKEN");
-  if (!geminiApiKey) missing.push("GOOGLE_GENERATIVE_AI_API_KEY");
-  if (!rawBase) missing.push("VOICESTUDIO_BASE_URL");
-  if (!voiceId) missing.push("VOICESTUDIO_VOICE_ID");
-
   let baseUrl = "";
-  if (rawBase) {
-    try {
-      const u = new URL(rawBase);
-      const loopback = LOOPBACK.has(u.hostname);
-      if (u.protocol !== "https:" && !(u.protocol === "http:" && loopback)) {
-        problems.push("VOICESTUDIO_BASE_URL must use https unless it is a loopback address");
-      } else if (u.username || u.password) {
-        problems.push("VOICESTUDIO_BASE_URL must not contain credentials");
-      } else {
-        if (!loopback && !authToken) {
-          problems.push("VOICESTUDIO_AUTH_TOKEN is required when VOICESTUDIO_BASE_URL is not a loopback address");
-        }
-        baseUrl = rawBase.replace(/\/+$/, "");
-      }
-    } catch {
-      problems.push("VOICESTUDIO_BASE_URL is not a valid URL");
-    }
-  }
+  let fmt: string | undefined;
 
-  const fmt = get("VOICESTUDIO_RESPONSE_FORMAT")?.toLowerCase();
-  if (fmt && fmt !== "wav" && fmt !== "mp3") {
-    problems.push("VOICESTUDIO_RESPONSE_FORMAT must be wav or mp3");
+  if (provider === "gradium") {
+    if (!gradiumApiKey) missing.push("GRADIUM_API_KEY");
+    if (!gradiumVoiceId) missing.push("GRADIUM_VOICE_ID");
+  } else {
+    if (!rawBase) missing.push("VOICESTUDIO_BASE_URL");
+    if (!voiceId) missing.push("VOICESTUDIO_VOICE_ID");
+    if (rawBase) {
+      try {
+        const u = new URL(rawBase);
+        const loopback = LOOPBACK.has(u.hostname);
+        if (u.protocol !== "https:" && !(u.protocol === "http:" && loopback)) {
+          problems.push("VOICESTUDIO_BASE_URL must use https unless it is a loopback address");
+        } else if (u.username || u.password) {
+          problems.push("VOICESTUDIO_BASE_URL must not contain credentials");
+        } else {
+          if (!loopback && !authToken) {
+            problems.push("VOICESTUDIO_AUTH_TOKEN is required when VOICESTUDIO_BASE_URL is not a loopback address");
+          }
+          baseUrl = rawBase.replace(/\/+$/, "");
+        }
+      } catch {
+        problems.push("VOICESTUDIO_BASE_URL is not a valid URL");
+      }
+    }
+    fmt = get("VOICESTUDIO_RESPONSE_FORMAT")?.toLowerCase();
+    if (fmt && fmt !== "wav" && fmt !== "mp3") {
+      problems.push("VOICESTUDIO_RESPONSE_FORMAT must be wav or mp3");
+    }
   }
 
   if (missing.length || problems.length) return { ok: false, missing, problems };
@@ -68,14 +86,16 @@ export function readConfig(
     config: {
       geminiApiKey: geminiApiKey!,
       geminiTimeoutMs: num(get("GEMINI_TIMEOUT_MS"), 15000),
+      voiceProvider: provider,
       voicestudio: {
         baseUrl,
-        voiceId: voiceId!,
+        voiceId: voiceId ?? "",
         authToken,
         model: get("VOICESTUDIO_MODEL"),
         responseFormat: fmt === "mp3" ? "mp3" : "wav",
-        timeoutMs: num(get("VOICESTUDIO_TIMEOUT_MS"), 40000),
+        timeoutMs,
       },
+      gradium: { apiKey: gradiumApiKey ?? "", voiceId: gradiumVoiceId ?? "", timeoutMs },
     },
   };
 }

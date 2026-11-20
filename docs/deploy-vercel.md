@@ -1,6 +1,6 @@
 # Deploy to Vercel
 
-Prerequisite for hosted audio: the authenticated gateway from [voicestudio.md](voicestudio.md) is running and `verify-gateway.sh` passes.
+With the default Gradium voice no computer needs to stay on and no gateway or Tailscale is needed. Only the optional VoiceStudio path ([voicestudio.md](voicestudio.md)) needs the authenticated gateway running and `verify-gateway.sh` passing.
 
 ## 1. Import
 
@@ -10,11 +10,23 @@ Vercel dashboard, Add New, Project, import this repo. Framework preset Next.js, 
 
 Project Settings, Environment Variables. Mark secrets as Sensitive.
 
-Production:
+Production (Gradium):
 
 | Name | Value |
 | --- | --- |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | your Gemini key (Sensitive) |
+| `VOICE_PROVIDER` | `gradium` |
+| `GRADIUM_API_KEY` | your Gradium key (Sensitive) |
+| `GRADIUM_VOICE_ID` | your cloned voice uid |
+| `JEFFY_PROFILE_JSON` | minified profile JSON (below) |
+
+Preview (Gradium): same `GOOGLE_GENERATIVE_AI_API_KEY`, `VOICE_PROVIDER`, `GRADIUM_API_KEY`, but `GRADIUM_VOICE_ID` is a built-in Gradium voice uid (`npm run voices:gradium`), never your clone. Leave `JEFFY_PROFILE_JSON` unset.
+
+Optional VoiceStudio instead (Production):
+
+| Name | Value |
+| --- | --- |
+| `VOICE_PROVIDER` | `voicestudio` |
 | `VOICESTUDIO_BASE_URL` | `https://<machine>.<tailnet>.ts.net` |
 | `VOICESTUDIO_AUTH_TOKEN` | the gateway token (Sensitive) |
 | `VOICESTUDIO_VOICE_ID` | your cloned profile id |
@@ -22,7 +34,7 @@ Production:
 
 Preview always uses the fictional example profile (enforced in code via `VERCEL_ENV=preview`, whatever `JEFFY_PROFILE_JSON` says). For Preview, set `VOICESTUDIO_VOICE_ID` to a built-in voice such as `alloy`, never your clone id.
 
-Preview:
+Optional VoiceStudio Preview:
 
 | Name | Value |
 | --- | --- |
@@ -53,4 +65,4 @@ Public demo: use a separate Vercel project (or the Preview environment) with no 
 
 1. Open the deployment while signed in to Vercel. The empty state reads "Type a question. Jeffy answers out loud."
 2. Ask a question; audio should play within a few seconds.
-3. If it fails, match the error to the table in the [README](../README.md#troubleshooting). Hosted audio needs your computer awake and online ([voicestudio.md](voicestudio.md#home-computer-caveat)).
+3. If it fails, match the error to the table in the [README](../README.md#troubleshooting). With VoiceStudio, hosted audio needs your computer awake and online ([voicestudio.md](voicestudio.md#home-computer-caveat)).

@@ -76,3 +76,8 @@ export class VoiceUpstreamError extends JeffyError {
     super("internal", 502, true, message, opts);
   }
 }
+export class VoiceQuotaError extends JeffyError {
+  constructor(opts: Opts = {}) {
+    super("voice_quota", 503, false, "Voice allowance used up", opts);
+  }
+}

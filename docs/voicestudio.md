@@ -1,4 +1,6 @@
-# VoiceStudio setup
+# VoiceStudio setup (optional, self-hosted)
+
+The default voice is hosted [Gradium](gradium.md). Use VoiceStudio only if you prefer to keep voice data on your own computer; set `VOICE_PROVIDER=voicestudio`.
 
 Jeffy uses [VoiceStudio](https://github.com/debpalash/VoiceStudio) (OpenAI-compatible `/v1/audio/speech`) for the voice. Supported release: **0.5.6**. Newer tags such as v0.5.9-beta.7 are betas. Pin an exact tag; never use `:latest`.
 
