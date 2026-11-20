@@ -1,15 +1,15 @@
 # Jeffy
 
-Jeffy takes typed questions and answers out loud in the owner's cloned voice. Replies are short, are never shown as text, and are labeled as AI-generated audio. There is no in-app sign-in: keep a private deployment behind Vercel Deployment Protection (see [docs/deploy-vercel.md](docs/deploy-vercel.md)).
+Jeffy takes typed questions and answers with streamed text plus an autoplaying voice reply in the owner's cloned voice. Each answer shows which memory topics were looked up, a collapsible reasoning summary, the text as it is written, and an audio player at the bottom labeled as AI-generated voice. The UI is always dark. There is no in-app sign-in: keep a private deployment behind Vercel Deployment Protection (see [docs/deploy-vercel.md](docs/deploy-vercel.md)).
 
 ## Architecture
 
 ```
 Browser --POST /api/chat--> Jeffy (Next.js on Vercel)
-                              |-- selects profile excerpts, asks Gemini (gemini-3.5-flash-lite) for a short reply
-                              '-- sends reply text to Gradium (default, hosted TTS over WebSocket)
+                              |-- selects profile excerpts, streams Gemini (gemini-3.5-flash-lite) thoughts + reply
+                              '-- sends final reply text reply text to Gradium (default, hosted TTS over WebSocket)
                                     or, optionally, to self-hosted VoiceStudio  POST /v1/audio/speech
-Browser <------ audio bytes ----'
+Browser <-- NDJSON events: memories, reasoning, text, text_done, audio --'
 ```
 
 ## Quick start (local)

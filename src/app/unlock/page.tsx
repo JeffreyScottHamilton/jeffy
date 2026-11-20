@@ -48,7 +48,7 @@ export default function Unlock() {
           onChange={(e) => setPassword(e.target.value)}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? "unlock-error" : undefined}
-          className="min-h-11 rounded-3xl border border-line bg-paper px-4 text-base text-ink"
+          className="min-h-11 rounded-3xl border border-line bg-raised px-4 text-base text-ink"
         />
         {error && (
           <p id="unlock-error" role="alert" className="text-sm text-danger">

@@ -3,18 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { PauseIcon, PlayIcon, ReplayIcon } from "./icons";
 
-export type TurnStatus = "pending" | "ready" | "error";
-
-export type Turn = {
-  id: string;
-  question: string;
-  status: TurnStatus;
-  audioUrl?: string;
-  reply?: string;
-  error?: string;
-  autoplay?: boolean;
-};
-
 function fmt(t: number) {
   if (!Number.isFinite(t) || t < 0) return "0:00";
   const s = Math.floor(t);
@@ -22,63 +10,57 @@ function fmt(t: number) {
 }
 
 const roundBtn =
-  "inline-flex size-11 shrink-0 items-center justify-center rounded-full transition-colors";
+  "inline-flex size-11 shrink-0 items-center justify-center rounded-full transition-[background-color,transform] duration-150 ease-out active:scale-95";
 
-export function AudioCard({
-  turn,
-  onRetry,
+export function AudioPlayer({
+  url,
+  autoplay,
   onPlaying,
+  onFailed,
 }: {
-  turn: Turn;
-  onRetry: () => void;
+  url: string;
+  autoplay: boolean;
   onPlaying: (el: HTMLAudioElement) => void;
+  onFailed: () => void;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
+  const fillRef = useRef<HTMLDivElement>(null);
+  const raf = useRef(0);
   const [playing, setPlaying] = useState(false);
+  const [blocked, setBlocked] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [failed, setFailed] = useState(false);
-  const { audioUrl, autoplay, status } = turn;
+
+  const paint = () => {
+    const el = audioRef.current;
+    const fill = fillRef.current;
+    if (!el || !fill) return;
+    const d = el.duration;
+    const p = Number.isFinite(d) && d > 0 ? Math.min(1, el.currentTime / d) : 0;
+    fill.style.transform = `scaleX(${p})`;
+  };
+
+  // Per-frame progress goes straight to the DOM, not through React state.
+  useEffect(() => {
+    if (!playing) {
+      paint();
+      return;
+    }
+    const tick = () => {
+      paint();
+      raf.current = requestAnimationFrame(tick);
+    };
+    raf.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf.current);
+  }, [playing]);
 
   useEffect(() => {
-    const el = audioRef.current;
-    if (!el || !audioUrl || !autoplay) return;
-    el.play().catch(() => {
-      /* autoplay blocked (NotAllowedError): stay paused, no error */
+    if (!autoplay) return;
+    audioRef.current?.play().catch((e: unknown) => {
+      // Browsers may refuse autoplay without a recent gesture; show a clear tap-to-play state.
+      if ((e as { name?: string })?.name !== "AbortError") setBlocked(true);
     });
-  }, [audioUrl, autoplay]);
-
-  const shell =
-    "jeffy-enter flex min-h-16 items-center gap-3 rounded-2xl border border-line py-2";
-
-  if (status === "pending") {
-    return (
-      <div className={`${shell} px-4`} role="status" aria-live="polite">
-        <span className="jeffy-pulse text-sm text-ink-muted">
-          Jeffy is thinking…
-        </span>
-      </div>
-    );
-  }
-
-  if (status === "error" || failed) {
-    const message = failed ? "This reply couldn't play." : turn.error;
-    return (
-      <div className={`${shell} justify-between px-4`} role="alert">
-        <span className="text-sm text-danger">{message}</span>
-        <button
-          type="button"
-          onClick={() => {
-            setFailed(false);
-            onRetry();
-          }}
-          className="inline-flex min-h-11 shrink-0 items-center rounded-full border border-line px-4 text-sm font-medium text-ink hover:bg-surface"
-        >
-          Try again
-        </button>
-      </div>
-    );
-  }
+  }, [autoplay]);
 
   const toggle = () => {
     const el = audioRef.current;
@@ -92,39 +74,44 @@ export function AudioCard({
     el.currentTime = 0;
     el.play().catch(() => {});
   };
-  const pct = duration > 0 ? Math.min(100, (time / duration) * 100) : 0;
 
   return (
-    <div className={`${shell} w-full max-w-sm px-2`}>
+    <div className="jeffy-enter flex w-full max-w-sm items-center gap-2 rounded-2xl border border-line bg-raised p-2">
       <audio
         ref={audioRef}
-        src={audioUrl}
+        src={url}
         preload="auto"
         onPlay={(e) => {
           setPlaying(true);
+          setBlocked(false);
           onPlaying(e.currentTarget);
         }}
         onPause={() => setPlaying(false)}
         onEnded={() => setPlaying(false)}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+        onSeeked={paint}
+        onLoadedMetadata={(e) => {
+          setDuration(e.currentTarget.duration);
+          paint();
+        }}
         onDurationChange={(e) => setDuration(e.currentTarget.duration)}
-        onError={() => setFailed(true)}
+        onError={onFailed}
       />
       <button
         type="button"
         onClick={toggle}
         aria-label={playing ? "Pause reply" : "Play reply"}
-        className={`${roundBtn} bg-cobalt text-white hover:bg-cobalt-press active:bg-cobalt-press`}
+        className={`${roundBtn} ${blocked ? "jeffy-dot " : ""}bg-cobalt text-white hover:bg-cobalt-press`}
       >
         {playing ? <PauseIcon /> : <PlayIcon />}
       </button>
       <div className="min-w-0 flex-1">
-        <div className="relative flex h-6 items-center has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-cobalt">
+        <div className="relative flex h-6 items-center has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent">
           <div className="h-[3px] w-full overflow-hidden rounded-full bg-track">
             <div
-              className="h-full rounded-full bg-cobalt"
-              style={{ width: `${pct}%` }}
+              ref={fillRef}
+              className="h-full origin-left rounded-full bg-accent"
+              style={{ transform: "scaleX(0)" }}
             />
           </div>
           <input
@@ -140,13 +127,14 @@ export function AudioCard({
               const v = Number(e.target.value);
               if (el) el.currentTime = v;
               setTime(v);
+              paint();
             }}
             className="absolute inset-x-0 -inset-y-2.5 h-11 w-full cursor-pointer opacity-0 focus-visible:outline-none"
           />
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-3 text-xs text-ink-muted">
           <span className="tabular-nums">
-            {fmt(time)} / {fmt(duration)}
+            {blocked ? "Tap to play" : `${fmt(time)} / ${fmt(duration)}`}
           </span>
           <span className="whitespace-nowrap">AI-generated voice</span>
         </div>

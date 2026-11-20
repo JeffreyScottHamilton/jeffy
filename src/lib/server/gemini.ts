@@ -25,29 +25,35 @@ function mapError(e: unknown): Error {
   return new ModelError("Model request failed");
 }
 
-export async function generateReply(
+export type ReplyChunk = { kind: "reasoning" | "text"; delta: string };
+
+export const MAX_OUTPUT_TOKENS = 1024; // thinking tokens count against this budget
+
+/** Streams thought summaries and answer text. Throws a JeffyError subclass on failure. */
+export async function* streamReply(
   prompt: Prompt,
   { apiKey, timeoutMs }: { apiKey: string; timeoutMs: number },
-): Promise<string> {
+): AsyncGenerator<ReplyChunk> {
   const ai = new GoogleGenAI({ apiKey });
-  let text: string | undefined;
   try {
-    const res = await ai.models.generateContent({
+    const stream = await ai.models.generateContentStream({
       model: GEMINI_MODEL,
       contents: prompt.contents,
       config: {
         systemInstruction: prompt.systemInstruction,
-        maxOutputTokens: 200,
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
         temperature: 0.6,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW, includeThoughts: true },
         abortSignal: AbortSignal.timeout(timeoutMs),
       },
     });
-    text = res.text;
+    for await (const chunk of stream) {
+      for (const part of chunk.candidates?.[0]?.content?.parts ?? []) {
+        if (!part.text) continue;
+        yield { kind: part.thought === true ? "reasoning" : "text", delta: part.text };
+      }
+    }
   } catch (e) {
     throw mapError(e);
   }
-  const out = cleanReply(text ?? "");
-  if (!out) throw new ModelError("Model returned no text");
-  return out;
 }

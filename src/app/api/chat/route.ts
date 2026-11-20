@@ -2,14 +2,14 @@ import "server-only";
 import {
   MAX_HISTORY_TURNS,
   MAX_QUESTION_CHARS,
-  REPLY_HEADER,
   type ChatErrorBody,
+  type ChatEvent,
   type ErrorCode,
 } from "@/lib/api-types";
 import { requestAuthorized } from "@/lib/server/auth";
 import { readConfig } from "@/lib/server/config";
 import { JeffyError } from "@/lib/server/errors";
-import { generateReply } from "@/lib/server/gemini";
+import { cleanReply, streamReply } from "@/lib/server/gemini";
 import { formatToday, loadProfile, ProfileError, resolveTimeZone, selectRelevant } from "@/lib/server/profile";
 import { buildPrompt, type Turn } from "@/lib/server/prompt";
 import { synthesizeGradium } from "@/lib/server/gradium";
@@ -87,8 +87,24 @@ function parseHistory(raw: unknown): Turn[] {
   return turns.slice(-MAX_HISTORY_TURNS);
 }
 
-function toBase64Url(s: string): string {
-  return Buffer.from(s, "utf8").toString("base64url");
+const encoder = new TextEncoder();
+const line = (e: ChatEvent) => encoder.encode(`${JSON.stringify(e)}\n`);
+
+// Stream-time cleanup of markdown characters; the final reply goes through cleanReply.
+const cleanDelta = (s: string) => s.replace(/[*_#`]/g, "");
+
+function failure(e: unknown, fallback: ErrorCode): { code: ErrorCode; message: string; retryable: boolean } {
+  if (e instanceof JeffyError) {
+    const message =
+      e.code === "config_missing" ? "The Gemini key was rejected. Check GOOGLE_GENERATIVE_AI_API_KEY." : MESSAGES[e.code];
+    console.error("[jeffy] chat stream failed", {
+      code: e.code,
+      ...(e.upstreamStatus ? { upstreamStatus: e.upstreamStatus } : {}),
+    });
+    return { code: e.code, message, retryable: e.retryable };
+  }
+  console.error("[jeffy] chat stream failed", { code: fallback });
+  return { code: fallback, message: MESSAGES[fallback], retryable: true };
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -130,21 +146,63 @@ export async function POST(request: Request): Promise<Response> {
     const timeZone = resolveTimeZone();
     const excerpt = selectRelevant(profile, question, history, now, timeZone);
     const prompt = buildPrompt(excerpt, history, question, formatToday(now, timeZone));
-    const reply = await generateReply(prompt, {
-      apiKey: cfg.config.geminiApiKey,
-      timeoutMs: cfg.config.geminiTimeoutMs,
+    const config = cfg.config;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const send = (e: ChatEvent) => {
+          if (!cancelled) controller.enqueue(line(e));
+        };
+        try {
+          send({ type: "memories", topics: [...new Set(excerpt.items.map((i) => i.topic))] });
+          let raw = "";
+          try {
+            for await (const chunk of streamReply(prompt, {
+              apiKey: config.geminiApiKey,
+              timeoutMs: config.geminiTimeoutMs,
+            })) {
+              if (cancelled) return;
+              if (chunk.kind === "reasoning") {
+                send({ type: "reasoning", delta: chunk.delta });
+              } else {
+                raw += chunk.delta;
+                const delta = cleanDelta(chunk.delta);
+                if (delta) send({ type: "text", delta });
+              }
+            }
+          } catch (e) {
+            send({ type: "error", ...failure(e, "model_error") });
+            return;
+          }
+          const reply = cleanReply(raw);
+          if (!reply) {
+            send({ type: "error", ...failure(null, "model_error") });
+            return;
+          }
+          send({ type: "text_done", text: reply });
+          try {
+            const { audio, contentType } =
+              config.voiceProvider === "gradium"
+                ? await synthesizeGradium(reply, config.gradium)
+                : await synthesize(reply, config.voicestudio);
+            send({ type: "audio", mime: contentType, data: Buffer.from(audio).toString("base64") });
+          } catch (e) {
+            send({ type: "audio_error", ...failure(e, "internal") });
+          }
+        } finally {
+          if (!cancelled) controller.close();
+        }
+      },
+      cancel() {
+        cancelled = true;
+      },
     });
-    const { audio, contentType } =
-      cfg.config.voiceProvider === "gradium"
-        ? await synthesizeGradium(reply, cfg.config.gradium)
-        : await synthesize(reply, cfg.config.voicestudio);
-
-    return new Response(audio, {
+    return new Response(body, {
       status: 200,
       headers: {
-        "Content-Type": contentType,
+        "Content-Type": "application/x-ndjson; charset=utf-8",
         "Cache-Control": "no-store",
-        [REPLY_HEADER]: toBase64Url(reply),
+        "X-Content-Type-Options": "nosniff",
       },
     });
   } catch (e) {

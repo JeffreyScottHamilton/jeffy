@@ -14,11 +14,12 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Jeffy",
-  description: "Ask by typing. Jeffy answers out loud.",
+  description: "Ask by typing. Jeffy thinks it through, writes the answer and says it out loud.",
 };
 
 export const viewport: Viewport = {
-  themeColor: "#F6F3EC",
+  themeColor: "#09090B",
+  colorScheme: "dark",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
@@ -28,7 +29,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} dark h-full bg-paper antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
