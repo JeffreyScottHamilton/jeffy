@@ -8,6 +8,21 @@
 	auto_https off
 }
 
+(proxy) {
+	reverse_proxy 127.0.0.1:3900 {
+		flush_interval -1
+		header_up -Authorization
+		header_up -Forwarded
+		header_up -X-Forwarded-For
+		header_up -X-Forwarded-Host
+		header_up -X-Forwarded-Proto
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 120s
+		}
+	}
+}
+
 http://127.0.0.1:8787 {
 	bind 127.0.0.1
 
@@ -44,21 +59,6 @@ http://127.0.0.1:8787 {
 		}
 		handle {
 			respond "Unauthorized" 401
-		}
-	}
-}
-
-(proxy) {
-	reverse_proxy 127.0.0.1:3900 {
-		flush_interval -1
-		header_up -Authorization
-		header_up -Forwarded
-		header_up -X-Forwarded-For
-		header_up -X-Forwarded-Host
-		header_up -X-Forwarded-Proto
-		transport http {
-			dial_timeout 5s
-			response_header_timeout 120s
 		}
 	}
 }
