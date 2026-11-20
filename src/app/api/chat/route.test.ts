@@ -158,7 +158,7 @@ describe("POST /api/chat", () => {
   it("never streams profile text, only topics", async () => {
     const text = await (await post({ question: QUESTION })).text();
     expect(text).not.toContain("systemInstruction");
-    expect(text).not.toContain("Profile excerpt");
+    expect(text).not.toContain("About you");
   });
   it("400 on an invalid mode; talk mode is accepted and adds the spoken-conversation hint", async () => {
     expect((await post({ question: QUESTION, mode: "shout" })).status).toBe(400);

@@ -9,20 +9,28 @@ describe("selectRelevant", () => {
   it("picks matching items for a relevant question", async () => {
     const ex = selectRelevant(await example(), "How do you like your coffee?", []);
     expect(ex.items.some((i) => i.topic === "coffee")).toBe(true);
-    expect(ex.items.length).toBeLessThanOrEqual(6);
-    expect(ex.examples.length).toBeLessThanOrEqual(2);
+    expect(ex.items[0].topic).toBe("coffee");
     expect(ex.examples.some((e) => /coffee/i.test(e.question))).toBe(true);
   });
-  it("returns nothing for unrelated questions but keeps style/phrases", async () => {
-    const ex = selectRelevant(await example(), "Quantum chromodynamics zebra?", []);
-    expect(ex.items).toEqual([]);
-    expect(ex.examples).toEqual([]);
+  it("includes everything for unrelated questions", async () => {
+    const p = await example();
+    const ex = selectRelevant(p, "Quantum chromodynamics zebra?", []);
+    expect(ex.items).toHaveLength(p.facts.length + p.preferences.length);
+    expect(ex.examples).toHaveLength(p.examples.length);
     expect(ex.name).toBe("Riley Park");
     expect(ex.style.length).toBeGreaterThan(0);
   });
-  it("caps phrases at 4", async () => {
+  it("keeps all phrases", async () => {
     const p = { ...(await example()), phrases: ["a", "b", "c", "d", "e", "f"] };
-    expect(selectRelevant(p, "hi", []).phrases).toHaveLength(4);
+    expect(selectRelevant(p, "hi", []).phrases).toHaveLength(6);
+  });
+  it("includes all items for a pronoun follow-up", async () => {
+    const p = await example();
+    const ex = selectRelevant(p, "what was it about?", [
+      { question: "send a long message?", reply: "I sent a really long message." },
+    ]);
+    expect(ex.items).toHaveLength(p.facts.length + p.preferences.length);
+    expect(ex.examples).toHaveLength(p.examples.length);
   });
   it("uses last history question with lower weight", async () => {
     const ex = selectRelevant(await example(), "and what about it?", [{ question: "Tell me about your cat", reply: "x" }]);
@@ -44,16 +52,16 @@ describe("selectRelevant relative dates", () => {
   const now = new Date("2026-11-20T18:00:00Z");
   it("selects yesterday's entry and not a prefix-matching day", async () => {
     const ex = selectRelevant(await withDays(), "what happened yesterday?", [], now, "America/Denver");
-    expect(ex.items.map((i) => i.text)).toEqual(["November 19, 2026: baked bread."]);
+    expect(ex.items[0].text).toBe("November 19, 2026: baked bread.");
   });
   it("selects today's entry", async () => {
     const ex = selectRelevant(await withDays(), "what did you do today?", [], now, "America/Denver");
-    expect(ex.items.map((i) => i.text)).toEqual(["November 20, 2026: wrote code."]);
+    expect(ex.items[0].text).toBe("November 20, 2026: wrote code.");
   });
   it("uses the timezone for the local date", async () => {
     const late = new Date("2026-11-20T03:00:00Z"); // Nov 19 evening in Denver
     const ex = selectRelevant(await withDays(), "what happened today?", [], late, "America/Denver");
-    expect(ex.items.map((i) => i.text)).toEqual(["November 19, 2026: baked bread."]);
+    expect(ex.items[0].text).toBe("November 19, 2026: baked bread.");
   });
 });
 

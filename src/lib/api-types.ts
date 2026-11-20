@@ -3,7 +3,7 @@ export type ErrorCode = "invalid_request" | "config_missing" | "rate_limited" | 
 export type ChatMode = "text" | "talk";
 export type ChatRequest = { question: string; history?: { question: string; reply: string }[]; mode?: ChatMode };
 export type ChatErrorBody = { error: { code: ErrorCode; message: string; retryable: boolean; retryAfterSeconds?: number } };
-export const MAX_QUESTION_CHARS = 500; export const MAX_HISTORY_TURNS = 4;
+export const MAX_QUESTION_CHARS = 500; export const MAX_HISTORY_TURNS = 8;
 
 /** One JSON object per line (NDJSON) streamed by POST /api/chat. Never carries profile text. */
 export type ChatEvent =

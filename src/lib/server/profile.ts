@@ -214,9 +214,7 @@ export function selectRelevant(
       text: i.text,
       score: score([...i.keywords, i.topic, i.text]) + (dates.some((re) => re.test(i.text)) ? 4 : 0),
     }))
-    .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 6)
     .map(({ kind, topic, text }) => ({ kind, topic, text }));
 
   const examples = profile.examples
@@ -225,15 +223,13 @@ export function selectRelevant(
       answer: e.answer,
       score: score([...(e.keywords ?? []), e.question]),
     }))
-    .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 2)
     .map(({ question, answer }) => ({ question, answer }));
 
   return {
     name: profile.name,
     style: profile.style,
-    phrases: profile.phrases.slice(0, 4),
+    phrases: profile.phrases,
     items,
     examples,
   };
