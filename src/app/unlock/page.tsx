@@ -37,7 +37,7 @@ export default function Unlock() {
       <h1 className="text-xl font-medium tracking-tight">Jeffy</h1>
       <form onSubmit={submit} className="mt-[20dvh] flex flex-col gap-3">
         <label htmlFor="password" className="text-[15px] text-ink-muted">
-          Password
+          What is the password to all of Jeffrey&apos;s secrets?
         </label>
         <input
           id="password"
