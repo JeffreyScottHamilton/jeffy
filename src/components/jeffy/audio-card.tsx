@@ -95,7 +95,7 @@ export function AudioCard({
   const pct = duration > 0 ? Math.min(100, (time / duration) * 100) : 0;
 
   return (
-    <div className={`${shell} px-2`}>
+    <div className={`${shell} w-full max-w-sm px-2`}>
       <audio
         ref={audioRef}
         src={audioUrl}
@@ -144,11 +144,11 @@ export function AudioCard({
             className="absolute inset-x-0 -inset-y-2.5 h-11 w-full cursor-pointer opacity-0 focus-visible:outline-none"
           />
         </div>
-        <div className="mt-0.5 flex items-center justify-between text-xs text-ink-muted">
+        <div className="mt-0.5 flex items-center justify-between gap-3 text-xs text-ink-muted">
           <span className="tabular-nums">
             {fmt(time)} / {fmt(duration)}
           </span>
-          <span>AI-generated voice</span>
+          <span className="whitespace-nowrap">AI-generated voice</span>
         </div>
       </div>
       <button

@@ -22,7 +22,7 @@ describe("readConfig", () => {
     if (r.ok) {
       expect(r.config.voicestudio.baseUrl).toBe("http://127.0.0.1:3900");
       expect(r.config.voicestudio.responseFormat).toBe("wav");
-      expect(r.config.voicestudio.timeoutMs).toBe(45000);
+      expect(r.config.voicestudio.timeoutMs).toBe(40000);
       expect(r.config.geminiTimeoutMs).toBe(15000);
     }
   });

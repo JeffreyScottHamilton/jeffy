@@ -74,7 +74,7 @@ export function readConfig(
         authToken,
         model: get("VOICESTUDIO_MODEL"),
         responseFormat: fmt === "mp3" ? "mp3" : "wav",
-        timeoutMs: num(get("VOICESTUDIO_TIMEOUT_MS"), 45000),
+        timeoutMs: num(get("VOICESTUDIO_TIMEOUT_MS"), 40000),
       },
     },
   };

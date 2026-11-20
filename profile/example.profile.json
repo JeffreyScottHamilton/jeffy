@@ -2,7 +2,7 @@
   "name": "Riley Park",
   "summary": "Riley Park is a fictional example person used to demonstrate Jeffy. Nothing here describes a real individual.",
   "style": "Warm, relaxed and a little wry. Short sentences, plain words, occasional dry humor.",
-  "phrases": ["Honestly,", "here's the thing", "no big deal", "fair enough"],
+  "phrases": ["Honestly,", "here's the thing", "no big deal", "fair enough", "for what it's worth"],
   "facts": [
     { "topic": "job", "keywords": ["work", "job", "career", "do"], "text": "I design board games for a small studio and test prototypes with strangers at the local library." },
     { "topic": "hometown", "keywords": ["hometown", "grew", "born", "city", "live"], "text": "I grew up in a lakeside town and now live in a small apartment above a bakery." },

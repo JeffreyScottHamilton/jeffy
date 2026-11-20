@@ -23,8 +23,10 @@ export type ProfileExcerpt = {
 };
 
 export class ProfileError extends Error {
-  constructor(message: string) {
+  source?: "env" | "file" | "example";
+  constructor(message: string, source?: "env" | "file" | "example") {
     super(message);
+    this.source = source;
     this.name = "ProfileError";
   }
 }
@@ -68,6 +70,15 @@ export function parseProfile(raw: unknown): Profile {
 }
 
 type Source = "env" | "file" | "example";
+
+function withSource<T>(source: Source, fn: () => T): T {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof ProfileError && !e.source) e.source = source;
+    throw e;
+  }
+}
 const cache = new Map<string, Profile>();
 
 async function readJson(file: string): Promise<unknown | undefined> {
@@ -75,7 +86,7 @@ async function readJson(file: string): Promise<unknown | undefined> {
     return JSON.parse(await readFile(path.join(process.cwd(), "profile", file), "utf8"));
   } catch (e) {
     if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return undefined;
-    throw new ProfileError(`Profile file ${file} could not be read as JSON`);
+    throw new ProfileError(`Profile file ${file} could not be read as JSON`, file.startsWith("example") ? "example" : "file");
   }
 }
 
@@ -99,15 +110,15 @@ export async function loadProfile(
         try {
           parsed = JSON.parse(json);
         } catch {
-          throw new ProfileError("JEFFY_PROFILE_JSON is not valid JSON");
+          throw new ProfileError("JEFFY_PROFILE_JSON is not valid JSON", "env");
         }
-        return parseProfile(parsed);
+        return withSource("env", () => parseProfile(parsed));
       });
       return { profile: profile!, source: "env" };
     }
     const file = await get("file", async () => {
       const raw = await readJson("profile.private.json");
-      return raw === undefined ? undefined : parseProfile(raw);
+      return raw === undefined ? undefined : withSource("file", () => parseProfile(raw));
     });
     if (file) return { profile: file, source: "file" };
   }

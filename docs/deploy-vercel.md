@@ -20,14 +20,16 @@ Production:
 | `VOICESTUDIO_VOICE_ID` | your cloned profile id |
 | `JEFFY_PROFILE_JSON` | minified profile JSON (below) |
 
+Preview always uses the fictional example profile (enforced in code via `VERCEL_ENV=preview`, whatever `JEFFY_PROFILE_JSON` says). For Preview, set `VOICESTUDIO_VOICE_ID` to a built-in voice such as `alloy`, never your clone id.
+
 Preview:
 
 | Name | Value |
 | --- | --- |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Gemini key (Sensitive) |
-| `VOICESTUDIO_BASE_URL`, `VOICESTUDIO_AUTH_TOKEN` | same as Production, or a mock-free public-demo gateway |
-| `VOICESTUDIO_VOICE_ID` | `alloy` (built-in, not your clone) |
-| `JEFFY_PROFILE_JSON` | do not set. The app also forces the fictional example when `VERCEL_ENV=preview` |
+| `VOICESTUDIO_BASE_URL`, `VOICESTUDIO_AUTH_TOKEN` | same as Production, or those of a separate public-demo gateway |
+| `VOICESTUDIO_VOICE_ID` | a built-in voice such as `alloy`. Never the clone id |
+| `JEFFY_PROFILE_JSON` | leave unset. Preview always uses the fictional example profile, enforced in code via `VERCEL_ENV=preview` |
 
 Minify the profile (keep it small; Vercel env vars total 64 KB):
 

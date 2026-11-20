@@ -67,8 +67,11 @@ Caddy allows only `POST /v1/audio/speech` and `GET /health`, caps bodies at 64 K
    ```
 3. Run Caddy (refuses to start with a missing or short token):
    ```bash
-   [ "${#VOICESTUDIO_AUTH_TOKEN}" -ge 32 ] || { echo "token too short"; exit 1; }
-   caddy run --config deploy/gateway/Caddyfile --adapter caddyfile
+   if [ "${#VOICESTUDIO_AUTH_TOKEN}" -ge 32 ]; then
+     caddy run --config deploy/gateway/Caddyfile --adapter caddyfile
+   else
+     echo "VOICESTUDIO_AUTH_TOKEN is missing or shorter than 32 characters; not starting Caddy."
+   fi
    ```
 4. Publish with Tailscale Funnel: `tailscale funnel --bg 8787`. Funnel serves public HTTPS on 443 (also 8443, 10000) and must be enabled for your tailnet (ACL `nodeAttrs` with the `funnel` attribute). `tailscale funnel status` shows the URL. That URL is `VOICESTUDIO_BASE_URL`. (Alternative: a Cloudflare Tunnel pointed at the same port 8787.)
 5. Verify:

@@ -56,6 +56,19 @@ describe("POST /api/chat", () => {
     expect(body.error.message).toContain("Missing: VOICESTUDIO_BASE_URL, VOICESTUDIO_VOICE_ID.");
     expect(text).not.toContain(KEY);
   });
+  it("503 config_missing for malformed JEFFY_PROFILE_JSON without echoing it", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("JEFFY_PROFILE_JSON", "{not json SECRETPROFILETEXT");
+    const r = await post({ question: QUESTION });
+    expect(r.status).toBe(503);
+    const text = await r.text();
+    const body = JSON.parse(text);
+    expect(body.error.code).toBe("config_missing");
+    expect(body.error.retryable).toBe(false);
+    expect(body.error.message).toContain("JEFFY_PROFILE_JSON");
+    expect(text).not.toContain("SECRETPROFILETEXT");
+    expect(logged()).not.toContain("SECRETPROFILETEXT");
+  });
   it("429 with Retry-After", async () => {
     vi.mocked(generateReply).mockRejectedValue(new RateLimitError({ retryAfterSeconds: 12 }));
     const r = await post({ question: QUESTION });

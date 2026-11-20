@@ -58,7 +58,7 @@ All are server-only. Set them in `.env.local` locally and in Vercel Project Sett
 | `JEFFY_PROFILE_JSON` | no | unset (use `profile/profile.private.json`) | minified profile JSON | Production only; never Preview |
 | `VOICESTUDIO_MODEL` | no | unset | unset | sent as `model` only if set |
 | `VOICESTUDIO_RESPONSE_FORMAT` | no | `wav` | `wav` or `mp3` (mp3 needs ffmpeg on the VoiceStudio machine) | any |
-| `VOICESTUDIO_TIMEOUT_MS` | no | 45000 | 45000 | any |
+| `VOICESTUDIO_TIMEOUT_MS` | no | 40000 | 45000 | any |
 | `GEMINI_TIMEOUT_MS` | no | 15000 | 15000 | any |
 
 `VOICESTUDIO_BASE_URL` must be `https:` unless it is loopback.

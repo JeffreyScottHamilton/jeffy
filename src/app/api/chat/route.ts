@@ -9,7 +9,7 @@ import {
 import { readConfig } from "@/lib/server/config";
 import { JeffyError } from "@/lib/server/errors";
 import { generateReply } from "@/lib/server/gemini";
-import { loadProfile, selectRelevant } from "@/lib/server/profile";
+import { loadProfile, ProfileError, selectRelevant } from "@/lib/server/profile";
 import { buildPrompt, type Turn } from "@/lib/server/prompt";
 import { synthesize } from "@/lib/server/voicestudio";
 
@@ -61,6 +61,9 @@ function errorResponse(
 
 const invalid = (message?: string) => errorResponse("invalid_request", 400, false, { message });
 
+// Truncate by code points so a surrogate pair is never split.
+const truncate = (s: string) => Array.from(s).slice(0, MAX_TURN_CHARS).join("");
+
 function parseHistory(raw: unknown): Turn[] {
   if (!Array.isArray(raw)) return [];
   const turns: Turn[] = [];
@@ -72,8 +75,8 @@ function parseHistory(raw: unknown): Turn[] {
       typeof (t as Turn).reply === "string"
     ) {
       turns.push({
-        question: (t as Turn).question.slice(0, MAX_TURN_CHARS),
-        reply: (t as Turn).reply.slice(0, MAX_TURN_CHARS),
+        question: truncate((t as Turn).question),
+        reply: truncate((t as Turn).reply),
       });
     }
   }
@@ -142,6 +145,17 @@ export async function POST(request: Request): Promise<Response> {
         message,
         retryAfterSeconds: e.retryAfterSeconds ?? (e.code === "rate_limited" ? 10 : undefined),
         upstreamStatus: e.upstreamStatus,
+      });
+    }
+    if (e instanceof ProfileError) {
+      const where =
+        e.source === "env"
+          ? "JEFFY_PROFILE_JSON"
+          : e.source === "file"
+            ? "profile/profile.private.json"
+            : "the example profile";
+      return errorResponse("config_missing", 503, false, {
+        message: `Jeffy isn't fully set up yet. ${where} is invalid.`,
       });
     }
     return errorResponse("internal", 500, true);
