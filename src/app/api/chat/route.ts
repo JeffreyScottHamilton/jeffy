@@ -4,6 +4,7 @@ import {
   MAX_QUESTION_CHARS,
   type ChatErrorBody,
   type ChatEvent,
+  type ChatMode,
   type ErrorCode,
 } from "@/lib/api-types";
 import { requestAuthorized } from "@/lib/server/auth";
@@ -12,8 +13,9 @@ import { JeffyError } from "@/lib/server/errors";
 import { cleanReply, streamReply } from "@/lib/server/gemini";
 import { formatToday, loadProfile, ProfileError, resolveTimeZone, selectRelevant } from "@/lib/server/profile";
 import { buildPrompt, type Turn } from "@/lib/server/prompt";
-import { synthesizeGradium } from "@/lib/server/gradium";
+import { streamGradium } from "@/lib/server/gradium";
 import { synthesize } from "@/lib/server/voicestudio";
+import { TextQueue } from "./text-queue";
 
 export const maxDuration = 60;
 // `dynamic` and `runtime` are omitted: both are rejected under cacheComponents (Next 16); nodejs is the default
@@ -129,6 +131,8 @@ export async function POST(request: Request): Promise<Response> {
     if (!question) return invalid();
     if (question.length > MAX_QUESTION_CHARS) return invalid("Keep questions under 500 characters.");
     const history = parseHistory(obj.history);
+    if (obj.mode !== undefined && obj.mode !== "text" && obj.mode !== "talk") return invalid();
+    const mode: ChatMode = obj.mode === "talk" ? "talk" : "text";
 
     const cfg = readConfig();
     if (!cfg.ok) {
@@ -146,45 +150,88 @@ export async function POST(request: Request): Promise<Response> {
     const timeZone = resolveTimeZone();
     const excerpt = selectRelevant(profile, question, history, now, timeZone);
     const prompt = buildPrompt(excerpt, history, question, formatToday(now, timeZone));
+    if (mode === "talk") {
+      prompt.systemInstruction +=
+        "\nThis is a live spoken conversation: answer in one or two short, natural sentences, like talking to a friend.";
+    }
     const config = cfg.config;
     let cancelled = false;
+    const ctrl = new AbortController();
+    const MAX_SPOKEN_CHARS = 600; // matches cleanReply's cap
     const body = new ReadableStream<Uint8Array>({
       async start(controller) {
         const send = (e: ChatEvent) => {
           if (!cancelled) controller.enqueue(line(e));
         };
+        const streaming = config.voiceProvider === "gradium";
+        let queue: TextQueue | undefined;
+        let voice: Promise<void> | undefined;
+        let spoken = 0;
+
+        // Starts on the first answer text so the Gradium deadline does not run while Gemini is still thinking.
+        const startVoice = () => {
+          const q = (queue = new TextQueue());
+          voice = (async () => {
+            try {
+              const { sampleRate, chunks } = await streamGradium(q, config.gradium, { signal: ctrl.signal });
+              let any = false;
+              for await (const c of chunks) {
+                if (cancelled || ctrl.signal.aborted) return;
+                any = true;
+                send({ type: "audio_chunk", data: Buffer.from(c).toString("base64"), sampleRate });
+              }
+              if (cancelled || ctrl.signal.aborted) return;
+              if (!any) throw new JeffyError("internal", 502, true, "Voice service returned empty audio");
+              send({ type: "audio_end" });
+            } catch (e) {
+              if (!cancelled && !ctrl.signal.aborted) send({ type: "audio_error", ...failure(e, "internal") });
+            }
+          })();
+        };
+
         try {
-          send({ type: "memories", topics: [...new Set(excerpt.items.map((i) => i.topic))] });
           let raw = "";
           try {
             for await (const chunk of streamReply(prompt, {
               apiKey: config.geminiApiKey,
               timeoutMs: config.geminiTimeoutMs,
+              signal: ctrl.signal,
             })) {
               if (cancelled) return;
-              if (chunk.kind === "reasoning") {
-                send({ type: "reasoning", delta: chunk.delta });
-              } else {
-                raw += chunk.delta;
-                const delta = cleanDelta(chunk.delta);
-                if (delta) send({ type: "text", delta });
+              raw += chunk.delta;
+              const delta = cleanDelta(chunk.delta);
+              if (!delta) continue;
+              send({ type: "text", delta });
+              if (streaming && spoken < MAX_SPOKEN_CHARS) {
+                if (!queue) startVoice();
+                const piece = delta.slice(0, MAX_SPOKEN_CHARS - spoken);
+                spoken += piece.length;
+                queue!.push(piece);
               }
             }
           } catch (e) {
+            ctrl.abort();
+            queue?.end();
+            await voice;
             send({ type: "error", ...failure(e, "model_error") });
             return;
           }
           const reply = cleanReply(raw);
           if (!reply) {
+            ctrl.abort();
+            queue?.end();
+            await voice;
             send({ type: "error", ...failure(null, "model_error") });
             return;
           }
           send({ type: "text_done", text: reply });
+          if (streaming) {
+            queue?.end();
+            await voice;
+            return;
+          }
           try {
-            const { audio, contentType } =
-              config.voiceProvider === "gradium"
-                ? await synthesizeGradium(reply, config.gradium)
-                : await synthesize(reply, config.voicestudio);
+            const { audio, contentType } = await synthesize(reply, config.voicestudio);
             send({ type: "audio", mime: contentType, data: Buffer.from(audio).toString("base64") });
           } catch (e) {
             send({ type: "audio_error", ...failure(e, "internal") });
@@ -195,6 +242,7 @@ export async function POST(request: Request): Promise<Response> {
       },
       cancel() {
         cancelled = true;
+        ctrl.abort();
       },
     });
     return new Response(body, {

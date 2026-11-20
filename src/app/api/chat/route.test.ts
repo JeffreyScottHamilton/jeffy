@@ -5,12 +5,12 @@ vi.mock("@/lib/server/gemini", async () => {
   return { streamReply: vi.fn(), cleanReply: actual.cleanReply, GEMINI_MODEL: "x" };
 });
 vi.mock("@/lib/server/voicestudio", () => ({ synthesize: vi.fn() }));
-vi.mock("@/lib/server/gradium", () => ({ synthesizeGradium: vi.fn() }));
+vi.mock("@/lib/server/gradium", () => ({ synthesizeGradium: vi.fn(), streamGradium: vi.fn() }));
 
 import { authToken } from "@/lib/server/auth";
 import { RateLimitError, VoiceOfflineError, VoiceTimeoutError } from "@/lib/server/errors";
 import { streamReply, type ReplyChunk } from "@/lib/server/gemini";
-import { synthesizeGradium } from "@/lib/server/gradium";
+import { streamGradium } from "@/lib/server/gradium";
 import { synthesize } from "@/lib/server/voicestudio";
 import { POST } from "./route";
 
@@ -26,7 +26,6 @@ beforeEach(() => {
   vi.stubEnv("VOICESTUDIO_VOICE_ID", "alloy");
   vi.stubEnv("VERCEL_ENV", "preview");
   mockChunks([
-    { kind: "reasoning", delta: "Thinking about coffee." },
     { kind: "text", delta: "Black and **strong**, " },
     { kind: "text", delta: "no big deal." },
   ]);
@@ -115,16 +114,16 @@ describe("POST /api/chat", () => {
     const r = await post({ question: QUESTION });
     expect(r.status).toBe(200);
     const ev = await events(r);
-    expect(ev.map((e) => e.type)).toEqual(["memories", "error"]);
-    expect(ev[1]).toMatchObject({ code: "rate_limited", retryable: true });
+    expect(ev.map((e) => e.type)).toEqual(["error"]);
+    expect(ev[0]).toMatchObject({ code: "rate_limited", retryable: true });
     expect(synthesize).not.toHaveBeenCalled();
   });
   it("audio_error keeps the text and reports voice_offline / voice_timeout", async () => {
     vi.mocked(synthesize).mockRejectedValueOnce(new VoiceOfflineError());
     let ev = await events(await post({ question: QUESTION }));
-    expect(ev.map((e) => e.type)).toEqual(["memories", "reasoning", "text", "text", "text_done", "audio_error"]);
-    expect(ev[4].text).toBe("Black and strong, no big deal.");
-    expect(ev[5]).toMatchObject({ code: "voice_offline", retryable: true });
+    expect(ev.map((e) => e.type)).toEqual(["text", "text", "text_done", "audio_error"]);
+    expect(ev[2].text).toBe("Black and strong, no big deal.");
+    expect(ev[3]).toMatchObject({ code: "voice_offline", retryable: true });
     vi.mocked(synthesize).mockRejectedValueOnce(new VoiceTimeoutError());
     ev = await events(await post({ question: QUESTION }));
     expect(ev.at(-1)).toMatchObject({ type: "audio_error", code: "voice_timeout" });
@@ -138,21 +137,20 @@ describe("POST /api/chat", () => {
     expect(text).not.toContain(KEY);
   });
   it("error event when the model returns no text", async () => {
-    mockChunks([{ kind: "reasoning", delta: "hmm" }]);
+    mockChunks([{ kind: "text", delta: " ** " }]);
     const ev = await events(await post({ question: QUESTION }));
     expect(ev.at(-1)).toMatchObject({ type: "error", code: "model_error" });
   });
-  it("streams ndjson in order: memories, reasoning, text, text_done, audio; only sends reply to voice", async () => {
+  it("streams ndjson in order: text, text_done, audio; only sends reply to voice", async () => {
     const r = await post({ question: "How do you like your coffee?", history: [{ question: "q", reply: "r" }, { bad: 1 }] });
     expect(r.status).toBe(200);
     expect(r.headers.get("content-type")).toContain("application/x-ndjson");
     expect(r.headers.get("cache-control")).toBe("no-store");
     const ev = await events(r);
-    expect(ev.map((e) => e.type)).toEqual(["memories", "reasoning", "text", "text", "text_done", "audio"]);
-    expect(Array.isArray(ev[0].topics)).toBe(true);
-    expect(ev[2].delta).toBe("Black and strong, ");
-    expect(ev[4].text).toBe("Black and strong, no big deal.");
-    expect(ev[5]).toEqual({ type: "audio", mime: "audio/wav", data: Buffer.from([9, 8, 7]).toString("base64") });
+    expect(ev.map((e) => e.type)).toEqual(["text", "text", "text_done", "audio"]);
+    expect(ev[0].delta).toBe("Black and strong, ");
+    expect(ev[2].text).toBe("Black and strong, no big deal.");
+    expect(ev[3]).toEqual({ type: "audio", mime: "audio/wav", data: Buffer.from([9, 8, 7]).toString("base64") });
     expect(vi.mocked(synthesize).mock.calls[0][0]).toBe("Black and strong, no big deal.");
     const prompt = vi.mocked(streamReply).mock.calls[0][0];
     expect(prompt.contents).toHaveLength(3);
@@ -162,16 +160,117 @@ describe("POST /api/chat", () => {
     expect(text).not.toContain("systemInstruction");
     expect(text).not.toContain("Profile excerpt");
   });
-  it("uses gradium when configured", async () => {
-    vi.stubEnv("VOICE_PROVIDER", "gradium");
-    vi.stubEnv("GRADIUM_API_KEY", "gsk-secret");
-    vi.stubEnv("GRADIUM_VOICE_ID", "voice1");
-    vi.mocked(synthesizeGradium).mockResolvedValue({ audio: new Uint8Array([1, 2]).buffer, contentType: "audio/wav" });
-    const ev = await events(await post({ question: QUESTION }));
-    expect(ev.at(-1)).toEqual({ type: "audio", mime: "audio/wav", data: Buffer.from([1, 2]).toString("base64") });
-    expect(vi.mocked(synthesizeGradium).mock.calls[0][0]).toBe("Black and strong, no big deal.");
-    expect(vi.mocked(synthesizeGradium).mock.calls[0][1]).toMatchObject({ apiKey: "gsk-secret", voiceId: "voice1" });
-    expect(synthesize).not.toHaveBeenCalled();
+  it("400 on an invalid mode; talk mode is accepted and adds the spoken-conversation hint", async () => {
+    expect((await post({ question: QUESTION, mode: "shout" })).status).toBe(400);
+    expect((await post({ question: QUESTION, mode: 3 })).status).toBe(400);
+    const r = await post({ question: QUESTION, mode: "talk" });
+    expect(r.status).toBe(200);
+    await r.text();
+    expect(vi.mocked(streamReply).mock.calls[0][0].systemInstruction).toContain("live spoken conversation");
+    await (await post({ question: QUESTION, mode: "text" })).text();
+    expect(vi.mocked(streamReply).mock.calls[1][0].systemInstruction).not.toContain("live spoken conversation");
+  });
+  it("never streams reasoning or memories", async () => {
+    const text = await (await post({ question: QUESTION })).text();
+    expect(text).not.toContain("reasoning");
+    expect(text).not.toContain("memories");
+  });
+
+  describe("gradium streaming", () => {
+    beforeEach(() => {
+      vi.stubEnv("VOICE_PROVIDER", "gradium");
+      vi.stubEnv("GRADIUM_API_KEY", "gsk-secret");
+      vi.stubEnv("GRADIUM_VOICE_ID", "voice1");
+    });
+    // Fake TTS: records what text it receives and emits one audio chunk per text piece it consumes.
+    const fakeVoice = (opts: { failAfter?: number; hang?: boolean } = {}) => {
+      const received: string[] = [];
+      let aborted = false;
+      vi.mocked(streamGradium).mockImplementation(async (text, _cfg, o) => {
+        o?.signal?.addEventListener("abort", () => (aborted = true));
+        async function* chunks() {
+          let n = 0;
+          for await (const piece of text) {
+            received.push(piece);
+            if (opts.failAfter !== undefined && n >= opts.failAfter) throw new VoiceOfflineError();
+            n++;
+            yield new Uint8Array([n, n]);
+          }
+          if (opts.hang) await new Promise(() => {});
+        }
+        return { sampleRate: 24000, chunks: chunks() };
+      });
+      return { received, wasAborted: () => aborted };
+    };
+
+    it("streams audio_chunk events interleaved with text, then audio_end", async () => {
+      const v = fakeVoice();
+      vi.mocked(streamReply).mockImplementation(async function* () {
+        yield { kind: "text", delta: "Black and **strong**, " };
+        await new Promise((r) => setTimeout(r, 20)); // the model is still working while audio flows
+        yield { kind: "text", delta: "no big deal." };
+      });
+      const ev = await events(await post({ question: QUESTION }));
+      const types = ev.map((e) => e.type);
+      expect(types.filter((t) => t === "audio_chunk")).toHaveLength(2);
+      expect(types.at(-1)).toBe("audio_end");
+      expect(types.indexOf("audio_chunk")).toBeLessThan(types.indexOf("text_done"));
+      expect(types.indexOf("text")).toBeLessThan(types.indexOf("audio_chunk"));
+      expect(ev.find((e) => e.type === "audio_chunk")).toEqual({
+        type: "audio_chunk",
+        data: Buffer.from([1, 1]).toString("base64"),
+        sampleRate: 24000,
+      });
+      expect(v.received.join("")).toBe("Black and strong, no big deal.");
+      expect(types).not.toContain("audio");
+      expect(synthesize).not.toHaveBeenCalled();
+      expect(vi.mocked(streamGradium).mock.calls[0][1]).toMatchObject({ apiKey: "gsk-secret", voiceId: "voice1" });
+    });
+    it("sends sanitized text to the voice, not markdown", async () => {
+      mockChunks([{ kind: "text", delta: "**Hi** `there`_" }]);
+      const v = fakeVoice();
+      await (await post({ question: QUESTION })).text();
+      expect(v.received).toEqual(["Hi there"]);
+    });
+    it("a voice failure mid-stream becomes audio_error and the text continues", async () => {
+      fakeVoice({ failAfter: 1 });
+      const ev = await events(await post({ question: QUESTION }));
+      const types = ev.map((e) => e.type);
+      expect(types).toContain("text_done");
+      expect(ev.find((e) => e.type === "text_done")?.text).toBe("Black and strong, no big deal.");
+      expect(types.at(-1)).toBe("audio_error");
+      expect(ev.at(-1)).toMatchObject({ code: "voice_offline", retryable: true });
+      expect(types).not.toContain("audio_end");
+    });
+    it("a voice that fails to open becomes audio_error", async () => {
+      vi.mocked(streamGradium).mockRejectedValue(new VoiceTimeoutError());
+      const ev = await events(await post({ question: QUESTION }));
+      expect(ev.map((e) => e.type).sort()).toEqual(["audio_error", "text", "text", "text_done"]);
+      expect(ev.find((e) => e.type === "audio_error")).toMatchObject({ code: "voice_timeout" });
+    });
+    it("a model failure mid-stream ends the voice and reports the error", async () => {
+      mockChunks([{ kind: "text", delta: "partial" }], new RateLimitError());
+      const v = fakeVoice();
+      const ev = await events(await post({ question: QUESTION }));
+      expect(ev.at(-1)).toMatchObject({ type: "error", code: "rate_limited" });
+      expect(ev.map((e) => e.type)).not.toContain("audio_end");
+      expect(v.wasAborted()).toBe(true);
+    });
+    it("cancelling the response aborts the voice and the model", async () => {
+      let modelSignal: AbortSignal | undefined;
+      vi.mocked(streamReply).mockImplementation(async function* (_p, o) {
+        modelSignal = o.signal;
+        yield { kind: "text", delta: "Hello there" };
+        await new Promise(() => {});
+      });
+      const v = fakeVoice();
+      const r = await post({ question: QUESTION });
+      const reader = r.body!.getReader();
+      await reader.read();
+      await reader.cancel();
+      expect(v.wasAborted()).toBe(true);
+      expect(modelSignal?.aborted).toBe(true);
+    });
   });
   it("console.error never contains question text or keys", async () => {
     mockChunks([], new Error(`${QUESTION} ${KEY}`));

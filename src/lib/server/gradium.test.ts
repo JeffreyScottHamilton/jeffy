@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GradiumAPIError, GradiumWebSocketError } from "@gradium/sdk";
-import { synthesizeGradium, type GradiumLike } from "./gradium";
+import { streamGradium, synthesizeGradium, type GradiumLike } from "./gradium";
 
 const cfg = { apiKey: "gsk-SECRET-KEY", voiceId: "voice-1", timeoutMs: 1000 };
 const TEXT = "private reply text";
-const fake = (impl: GradiumLike["tts"]) => () => ({ tts: impl });
+const noStream = () => Promise.reject(new Error("unused"));
+const fake = (impl: GradiumLike["tts"]) => () => ({ tts: impl, ttsStream: noStream });
 const failing = (e: unknown) => fake(() => Promise.reject(e));
 
 afterEach(() => vi.restoreAllMocks());
@@ -62,5 +63,74 @@ describe("synthesizeGradium", () => {
     const seen = JSON.stringify(spies.map((s) => s.mock.calls)) + e.message + JSON.stringify(e);
     expect(seen).not.toContain(TEXT);
     expect(seen).not.toContain(cfg.apiKey);
+  });
+});
+
+describe("streamGradium", () => {
+  async function* words() {
+    yield "Hello ";
+    yield "there";
+  }
+  const streamer = (open: GradiumLike["ttsStream"]) => () => ({ tts: () => Promise.reject(new Error("unused")), ttsStream: open });
+  const collect = async (g: AsyncGenerator<Uint8Array>) => {
+    const out: number[][] = [];
+    for await (const c of g) out.push([...c]);
+    return out;
+  };
+
+  it("opens a pcm stream, yields chunks (skipping empty ones) and closes", async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    const open = vi.fn().mockResolvedValue({
+      sampleRate: 24000,
+      iterBytes: async function* () {
+        yield new Uint8Array([1, 2]);
+        yield new Uint8Array();
+        yield new Uint8Array([3, 4]);
+      },
+      close,
+    });
+    const r = await streamGradium(words(), cfg, { clientFactory: streamer(open) });
+    expect(r.sampleRate).toBe(24000);
+    expect(await collect(r.chunks)).toEqual([[1, 2], [3, 4]]);
+    expect(open.mock.calls[0][0]).toEqual({ voice_id: "voice-1", output_format: "pcm_24000" });
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("maps open and mid-stream errors", async () => {
+    const e1 = await streamGradium(words(), cfg, { clientFactory: streamer(() => Promise.reject(new GradiumAPIError("x", 401, {}))) }).catch((x) => x);
+    expect(e1.code).toBe("voice_auth");
+    const r = await streamGradium(words(), cfg, {
+      clientFactory: streamer(async () => ({
+        iterBytes: async function* () {
+          yield new Uint8Array([1]);
+          throw new GradiumAPIError("x", 429, {});
+        },
+        close: async () => {},
+      })),
+    });
+    const e2 = await collect(r.chunks).catch((x) => x);
+    expect(e2.code).toBe("voice_busy");
+  });
+
+  it("times out when the stream stalls", async () => {
+    const r = await streamGradium(words(), { ...cfg, timeoutMs: 30 }, {
+      clientFactory: streamer(async () => ({ iterBytes: async function* () { await new Promise(() => {}); }, close: async () => {} })),
+    });
+    const e = await collect(r.chunks).catch((x) => x);
+    expect(e.code).toBe("voice_timeout");
+  });
+
+  it("passes the abort signal through to the SDK", async () => {
+    const ac = new AbortController();
+    let seen: AbortSignal | undefined;
+    await streamGradium(words(), cfg, {
+      signal: ac.signal,
+      clientFactory: streamer(async (_s, _t, o) => {
+        seen = o?.signal;
+        return { iterBytes: async function* () {}, close: async () => {} };
+      }),
+    });
+    ac.abort();
+    expect(seen?.aborted).toBe(true);
   });
 });

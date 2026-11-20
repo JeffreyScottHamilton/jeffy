@@ -36,6 +36,12 @@ html {
   background-color: #09090b;
 }
 
+/* Inner scrollers get a thin, quiet bar that only exists when content overflows (the page itself is h-dvh). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--track) transparent;
+}
+
 html,
 body {
   background: var(--paper);
@@ -131,6 +137,25 @@ body {
   overflow: hidden;
 }
 
+/* "Thinking about it…" fades out as the answer starts, then its row (and the flex gap) collapses. */
+.jeffy-thinking {
+  transition: opacity 180ms ease-out;
+}
+
+.jeffy-collapse[data-open="false"] > .jeffy-thinking {
+  opacity: 0;
+}
+
+.jeffy-collapse:has(> .jeffy-thinking) {
+  transition:
+    grid-template-rows 240ms var(--ease-out),
+    margin-bottom 240ms var(--ease-out);
+}
+
+.jeffy-collapse[data-open="false"]:has(> .jeffy-thinking) {
+  margin-bottom: -0.5rem;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .jeffy-enter,
   .jeffy-word,
@@ -144,7 +169,108 @@ body {
     background: none;
   }
 
-  .jeffy-collapse {
+  .jeffy-collapse,
+  .jeffy-collapse:has(> .jeffy-thinking) {
     transition: none;
+  }
+}
+
+/* Talk mode orb. --lvl (0..1) is written per frame by TalkView. */
+@keyframes jeffy-morph {
+  0% {
+    border-radius: 46% 54% 52% 48% / 52% 44% 56% 48%;
+    transform: rotate(0deg);
+  }
+  50% {
+    border-radius: 56% 44% 42% 58% / 44% 56% 46% 54%;
+  }
+  100% {
+    border-radius: 48% 52% 58% 42% / 56% 48% 52% 44%;
+    transform: rotate(180deg);
+  }
+}
+
+@keyframes jeffy-breathe {
+  0%,
+  100% {
+    scale: 1;
+  }
+  50% {
+    scale: 1.05;
+  }
+}
+
+.jeffy-orb {
+  --lvl: 0;
+  position: relative;
+  width: min(58vw, 17rem, 36dvh);
+  aspect-ratio: 1;
+  transition: opacity 400ms ease-out;
+}
+
+.jeffy-orb > span {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+.jeffy-orb-halo {
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 45%, transparent), transparent 68%);
+  inset: -18% !important;
+  opacity: calc(0.25 + var(--lvl) * 0.75);
+}
+
+.jeffy-orb-core {
+  border-radius: 50%;
+  background: radial-gradient(circle at 34% 28%, #cfd9ff 0%, var(--accent) 30%, var(--cobalt) 68%, #1b2a6b 100%);
+}
+
+.jeffy-orb-blob {
+  background: radial-gradient(circle at 60% 40%, color-mix(in srgb, var(--accent) 70%, transparent), transparent 70%);
+  mix-blend-mode: screen;
+  opacity: 0.7;
+}
+
+.jeffy-orb[data-state="muted"],
+.jeffy-orb[data-state="idle"] {
+  opacity: 0.4;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .jeffy-orb-core,
+  .jeffy-orb-halo {
+    transform: scale(calc(1 + var(--lvl) * 0.22));
+  }
+
+  .jeffy-orb-blob-a {
+    animation: jeffy-morph 9s ease-in-out infinite alternate;
+  }
+
+  .jeffy-orb-blob-b {
+    animation: jeffy-morph 13s ease-in-out infinite alternate-reverse;
+    inset: 8% !important;
+  }
+
+  .jeffy-orb[data-state="speaking"] .jeffy-orb-blob-a {
+    animation-duration: 4.5s;
+  }
+
+  .jeffy-orb[data-state="speaking"] .jeffy-orb-blob-b {
+    animation-duration: 6s;
+  }
+
+  .jeffy-orb[data-state="thinking"] {
+    animation: jeffy-breathe 2.4s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jeffy-orb-blob {
+    opacity: 0.35;
+  }
+
+  .jeffy-orb[data-state="thinking"] .jeffy-orb-halo {
+    opacity: 0.6;
   }
 }

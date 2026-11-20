@@ -2,27 +2,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  ChainOfThought,
-  ChainOfThoughtContent,
-  ChainOfThoughtItem,
-  ChainOfThoughtStep,
-  ChainOfThoughtTrigger,
-} from "@/components/prompt-kit/chain-of-thought";
-import {
   Message,
   MessageAction,
   MessageActions,
   MessageContent,
 } from "@/components/prompt-kit/message";
-import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningTrigger,
-} from "@/components/prompt-kit/reasoning";
 import { TextShimmer } from "@/components/prompt-kit/text-shimmer";
-import { AudioPlayer } from "./audio-player";
+import { AudioPlayer, LivePlayer } from "./audio-player";
+import { Collapse } from "./collapse";
 import { CheckIcon, CopyIcon, RegenerateIcon } from "./icons";
 import type { Turn } from "./types";
+import type { VoiceEngine } from "./voice-engine";
 
 /** Words keep a stable key, so each one fades in once when it first appears. */
 function StreamedText({ text }: { text: string }) {
@@ -47,18 +37,20 @@ const ghostBtn =
 
 export function TurnView({
   turn,
+  engine,
   busy,
   onRegenerate,
   onPlaying,
   onVoiceFailed,
 }: {
   turn: Turn;
+  engine: VoiceEngine;
   busy: boolean;
   onRegenerate: () => void;
   onPlaying: (el: HTMLAudioElement) => void;
   onVoiceFailed: () => void;
 }) {
-  const { status, memories, reasoning, text, voice } = turn;
+  const { status, text, voice } = turn;
   const streaming = status === "streaming";
   const thinking = streaming && !text;
   const [copied, setCopied] = useState(false);
@@ -82,43 +74,15 @@ export function TurnView({
         {turn.question}
       </p>
       <Message className="gap-2 self-start">
-        {thinking && (
-          <div role="status" className="flex min-h-8 items-center text-sm">
-            <TextShimmer>Thinking…</TextShimmer>
+        <Collapse open={thinking} className="jeffy-thinking">
+          <div
+            role={thinking ? "status" : undefined}
+            aria-hidden={!thinking}
+            className="flex min-h-8 items-center text-[15px]"
+          >
+            <TextShimmer>Thinking about it…</TextShimmer>
           </div>
-        )}
-
-        {memories && (
-          <div className="jeffy-enter">
-            <ChainOfThought>
-              <ChainOfThoughtStep>
-                <ChainOfThoughtTrigger disabled={memories.length === 0}>
-                  {memories.length === 0
-                    ? "No matching memories"
-                    : `Memories · ${memories.length} ${memories.length === 1 ? "topic" : "topics"}`}
-                </ChainOfThoughtTrigger>
-                {memories.length > 0 && (
-                  <ChainOfThoughtContent>
-                    {memories.map((m) => (
-                      <ChainOfThoughtItem key={m}>{m}</ChainOfThoughtItem>
-                    ))}
-                  </ChainOfThoughtContent>
-                )}
-              </ChainOfThoughtStep>
-            </ChainOfThought>
-          </div>
-        )}
-
-        {reasoning && (
-          <Reasoning isStreaming={thinking} className="jeffy-enter">
-            <ReasoningTrigger>
-              {thinking ? <TextShimmer>Reasoning</TextShimmer> : "Reasoning"}
-            </ReasoningTrigger>
-            <ReasoningContent contentClassName="max-h-48 overflow-y-auto border-l border-line pl-4 whitespace-pre-wrap [overflow-wrap:anywhere]">
-              {reasoning}
-            </ReasoningContent>
-          </Reasoning>
-        )}
+        </Collapse>
 
         {text && (
           <MessageContent
@@ -155,6 +119,7 @@ export function TurnView({
             Generating voice…
           </div>
         )}
+        {voice.status === "live" && <LivePlayer engine={engine} />}
         {voice.status === "ready" && (
           <AudioPlayer
             key={voice.url}

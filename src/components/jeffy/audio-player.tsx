@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { PauseIcon, PlayIcon, ReplayIcon } from "./icons";
+import { PauseIcon, PlayIcon, ReplayIcon, StopIcon } from "./icons";
+import type { VoiceEngine } from "./voice-engine";
 
 function fmt(t: number) {
   if (!Number.isFinite(t) || t < 0) return "0:00";
@@ -136,7 +137,6 @@ export function AudioPlayer({
           <span className="tabular-nums">
             {blocked ? "Tap to play" : `${fmt(time)} / ${fmt(duration)}`}
           </span>
-          <span className="whitespace-nowrap">AI-generated voice</span>
         </div>
       </div>
       <button
@@ -146,6 +146,71 @@ export function AudioPlayer({
         className={`${roundBtn} text-ink hover:bg-surface`}
       >
         <ReplayIcon />
+      </button>
+    </div>
+  );
+}
+
+/** Same look as AudioPlayer, driven by the VoiceEngine while the reply is still being received. */
+export function LivePlayer({ engine }: { engine: VoiceEngine }) {
+  const fillRef = useRef<HTMLDivElement>(null);
+  const timeRef = useRef<HTMLSpanElement>(null);
+  const [paused, setPaused] = useState(engine.paused);
+
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const pos = engine.position();
+      const dur = engine.duration();
+      // While chunks are still arriving the total is unknown, so leave headroom instead of pinning the bar full.
+      const total = engine.receivedAll ? dur : dur + 3;
+      if (fillRef.current) {
+        fillRef.current.style.transform = `scaleX(${total > 0 ? Math.min(1, pos / total) : 0})`;
+      }
+      if (timeRef.current) {
+        timeRef.current.textContent = engine.receivedAll ? `${fmt(pos)} / ${fmt(dur)}` : fmt(pos);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [engine]);
+
+  useEffect(() => engine.subscribe(() => setPaused(engine.paused)), [engine]);
+
+  return (
+    <div className="jeffy-enter flex w-full max-w-sm items-center gap-2 rounded-2xl border border-line bg-raised p-2">
+      <button
+        type="button"
+        onClick={() => (paused ? engine.resume() : engine.pause())}
+        aria-label={paused ? "Resume reply" : "Pause reply"}
+        className={`${roundBtn} bg-cobalt text-white hover:bg-cobalt-press`}
+      >
+        {paused ? <PlayIcon /> : <PauseIcon />}
+      </button>
+      <div className="min-w-0 flex-1">
+        <div className="flex h-6 items-center">
+          <div className="h-[3px] w-full overflow-hidden rounded-full bg-track">
+            <div
+              ref={fillRef}
+              className="h-full origin-left rounded-full bg-accent"
+              style={{ transform: "scaleX(0)" }}
+            />
+          </div>
+        </div>
+        <div className="mt-0.5 text-xs text-ink-muted">
+          <span ref={timeRef} className="tabular-nums">
+            0:00
+          </span>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={() => engine.stop()}
+        aria-label="Stop reply"
+        className={`${roundBtn} text-ink hover:bg-surface`}
+      >
+        <StopIcon />
       </button>
     </div>
   );

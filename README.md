@@ -1,15 +1,15 @@
 # Jeffy
 
-Jeffy takes typed questions and answers with streamed text plus an autoplaying voice reply in the owner's cloned voice. Each answer shows which memory topics were looked up, a collapsible reasoning summary, the text as it is written, and an audio player at the bottom labeled as AI-generated voice. The UI is always dark. There is no in-app sign-in: keep a private deployment behind Vercel Deployment Protection (see [docs/deploy-vercel.md](docs/deploy-vercel.md)).
+Jeffy answers typed questions with streamed text and a voice reply in the owner's cloned voice. While the model is working the answer shows "Thinking about it…"; the voice starts playing while the text is still being written, and a player at the bottom of the message supports pause, seek and replay once it has finished. The Talk button opens a hands-free voice conversation (browser speech recognition, barge-in by speaking over Jeffy; needs Chrome, Edge or Safari and microphone access). The UI is always dark. There is no in-app sign-in: keep a private deployment behind Vercel Deployment Protection (see [docs/deploy-vercel.md](docs/deploy-vercel.md)).
 
 ## Architecture
 
 ```
-Browser --POST /api/chat--> Jeffy (Next.js on Vercel)
-                              |-- selects profile excerpts, streams Gemini (gemini-3.5-flash-lite) thoughts + reply
-                              '-- sends final reply text reply text to Gradium (default, hosted TTS over WebSocket)
-                                    or, optionally, to self-hosted VoiceStudio  POST /v1/audio/speech
-Browser <-- NDJSON events: memories, reasoning, text, text_done, audio --'
+Browser --POST /api/chat {question, history, mode: text|talk}--> Jeffy (Next.js on Vercel)
+                              |-- selects profile excerpts, streams Gemini (gemini-3.5-flash-lite, minimal thinking)
+                              '-- pipes the reply text, as it arrives, into Gradium streaming TTS (default, WebSocket)
+                                    or, optionally, sends the final reply to self-hosted VoiceStudio POST /v1/audio/speech
+Browser <-- NDJSON events: text, text_done, audio_chunk (PCM s16le 24 kHz), audio_end, audio (VoiceStudio only), audio_error, error --'
 ```
 
 ## Quick start (local)

@@ -18,11 +18,14 @@ import {
   MAX_QUESTION_CHARS,
   type ChatErrorBody,
   type ChatEvent,
+  type ChatMode,
   type ChatRequest,
 } from "@/lib/api-types";
-import { SendIcon, StopIcon } from "./icons";
+import { SendIcon, StopIcon, WaveformIcon } from "./icons";
+import { TalkView } from "./talk-view";
 import { TurnView } from "./turn-view";
 import { newTurn, type Turn } from "./types";
+import { VoiceEngine } from "./voice-engine";
 
 const NETWORK_MSG = "Couldn't reach Jeffy. Check your connection and try again.";
 const GENERIC_MSG = "Something went wrong. Try again.";
@@ -33,17 +36,25 @@ const SUGGESTIONS = [
   "What happened yesterday?",
 ];
 
-function blobUrl(data: string, mime: string): string {
+function b64ToBytes(data: string): Uint8Array<ArrayBuffer> {
   const bin = atob(data);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return URL.createObjectURL(new Blob([bytes], { type: mime }));
+  return bytes;
 }
 
 export function Chat() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
   const [running, setRunning] = useState(false);
+  const [talkOpen, setTalkOpen] = useState(false);
+  const [engine] = useState(() => new VoiceEngine());
+  const talkButton = useRef<HTMLButtonElement>(null);
+  const runningRef = useRef(false);
+  /** Per-turn voice errors held until the audio that already arrived has played. */
+  const voiceErrors = useRef(new Map<string, string>());
+  /** Turns whose live voice was stopped by the user: later chunks are dropped. */
+  const silenced = useRef(new Set<string>());
   const current = useRef<HTMLAudioElement | null>(null);
   const urls = useRef(new Map<string, string>());
   const abort = useRef<AbortController | null>(null);
@@ -56,11 +67,12 @@ export function Chat() {
     const map = urls.current;
     return () => {
       abort.current?.abort();
+      engine.dispose();
       current.current?.pause();
       map.forEach((u) => URL.revokeObjectURL(u));
       map.clear();
     };
-  }, []);
+  }, [engine]);
 
   const patch = (id: string, fn: (t: Turn) => Turn) =>
     setTurns((ts) => ts.map((t) => (t.id === id ? fn(t) : t)));
@@ -73,14 +85,31 @@ export function Chat() {
     }
   };
 
-  const apply = (id: string, ev: ChatEvent) => {
+  const startLive = (id: string) => {
+    engine.begin(id, (r) => {
+      const err = voiceErrors.current.get(id);
+      voiceErrors.current.delete(id);
+      if (err) {
+        patch(id, (t) => (t.voice.status === "live" ? { ...t, voice: { status: "error", message: err } } : t));
+        return;
+      }
+      if (!r.complete) silenced.current.add(id);
+      if (r.wav) {
+        revoke(id);
+        const url = URL.createObjectURL(r.wav);
+        urls.current.set(id, url);
+        patch(id, (t) =>
+          t.voice.status === "live" ? { ...t, voice: { status: "ready", url, autoplay: false } } : t,
+        );
+      } else {
+        patch(id, (t) => (t.voice.status === "live" ? { ...t, voice: { status: "none" } } : t));
+      }
+    });
+    patch(id, (t) => ({ ...t, voice: { status: "live" } }));
+  };
+
+  const apply = (id: string, ev: ChatEvent, mode: ChatMode = "text") => {
     switch (ev.type) {
-      case "memories":
-        patch(id, (t) => ({ ...t, memories: ev.topics }));
-        break;
-      case "reasoning":
-        patch(id, (t) => ({ ...t, reasoning: t.reasoning + ev.delta }));
-        break;
       case "text":
         patch(id, (t) => ({ ...t, text: t.text + ev.delta }));
         break;
@@ -90,24 +119,46 @@ export function Chat() {
           status: "done",
           text: ev.text,
           final: ev.text,
-          voice: { status: "pending" },
+          voice: t.voice.status === "none" ? { status: "pending" } : t.voice,
         }));
         break;
+      case "audio_chunk":
+        if (silenced.current.has(id)) break;
+        if (engine.turnId !== id) startLive(id);
+        engine.push(b64ToBytes(ev.data), ev.sampleRate);
+        break;
+      case "audio_end":
+        if (engine.turnId === id) engine.end();
+        break;
       case "audio": {
+        if (silenced.current.has(id)) break;
         revoke(id);
-        let url: string;
+        let bytes: Uint8Array<ArrayBuffer>;
         try {
-          url = blobUrl(ev.data, ev.mime);
+          bytes = b64ToBytes(ev.data);
         } catch {
           patch(id, (t) => ({ ...t, voice: { status: "error", message: NO_VOICE_MSG } }));
           break;
         }
+        const url = URL.createObjectURL(new Blob([bytes], { type: ev.mime }));
         urls.current.set(id, url);
-        patch(id, (t) => ({ ...t, voice: { status: "ready", url, autoplay: true } }));
+        if (mode === "talk") {
+          // Talk mode speaks through the engine so the orb can follow the output level.
+          patch(id, (t) => ({ ...t, voice: { status: "ready", url, autoplay: false } }));
+          void engine.playEncoded(id, bytes.slice().buffer, () => {});
+        } else {
+          patch(id, (t) => ({ ...t, voice: { status: "ready", url, autoplay: true } }));
+        }
         break;
       }
       case "audio_error":
-        patch(id, (t) => ({ ...t, voice: { status: "error", message: ev.message } }));
+        if (silenced.current.has(id)) break;
+        if (engine.turnId === id) {
+          voiceErrors.current.set(id, ev.message);
+          engine.end();
+        } else {
+          patch(id, (t) => ({ ...t, voice: { status: "error", message: ev.message } }));
+        }
         break;
       case "error":
         patch(id, (t) => ({ ...t, status: "error", error: ev.message }));
@@ -115,14 +166,15 @@ export function Chat() {
     }
   };
 
-  const run = async (id: string, question: string, before: Turn[]) => {
+  const run = async (id: string, question: string, before: Turn[], mode: ChatMode) => {
     const history = before
       .filter((t) => t.final)
       .slice(-MAX_HISTORY_TURNS)
       .map((t) => ({ question: t.question, reply: t.final as string }));
-    const body: ChatRequest = { question, history };
+    const body: ChatRequest = { question, history, mode };
     const ctrl = new AbortController();
     abort.current = ctrl;
+    runningRef.current = true;
     setRunning(true);
     let sawError = false;
     let gotText = false;
@@ -158,8 +210,8 @@ export function Chat() {
         }
         if (ev.type === "error") sawError = true;
         if (ev.type === "text_done") gotText = true;
-        if (ev.type === "audio" || ev.type === "audio_error") gotAudio = true;
-        apply(id, ev);
+        if (ev.type === "audio" || ev.type === "audio_error" || ev.type === "audio_chunk") gotAudio = true;
+        apply(id, ev, mode);
       };
       for (;;) {
         const { value, done } = await reader.read();
@@ -172,6 +224,7 @@ export function Chat() {
         }
       }
       handle(buf + decoder.decode());
+      if (engine.turnId === id) engine.end(); // stream closed without audio_end: play out what arrived
       if (!sawError && !gotText) {
         apply(id, { type: "error", code: "internal", message: GENERIC_MSG, retryable: true });
       } else if (gotText && !gotAudio) {
@@ -180,6 +233,7 @@ export function Chat() {
     } catch (e) {
       if ((e as { name?: string })?.name === "AbortError") {
         // Stopped by the user: keep whatever text arrived.
+        if (engine.turnId === id) engine.stop();
         patch(id, (t) =>
           t.final
             ? { ...t, voice: t.voice.status === "pending" ? { status: "none" } : t.voice }
@@ -193,24 +247,35 @@ export function Chat() {
     } finally {
       if (abort.current === ctrl) {
         abort.current = null;
+        runningRef.current = false;
         setRunning(false);
       }
     }
   };
 
-  const ask = (question: string, replaceId?: string) => {
-    if (running) return;
+  const ask = (
+    question: string,
+    { replaceId, mode = "text" }: { replaceId?: string; mode?: ChatMode } = {},
+  ): string | null => {
+    if (runningRef.current) return null;
+    // Runs inside the click/submit gesture, which is what lets the AudioContext start.
+    engine.unlock();
+    engine.stop();
     current.current?.pause();
     const index = replaceId ? turns.findIndex((t) => t.id === replaceId) : turns.length;
     const before = turns.slice(0, Math.max(index, 0));
     const id = replaceId ?? crypto.randomUUID();
+    silenced.current.delete(id);
+    voiceErrors.current.delete(id);
     if (replaceId) {
       revoke(id);
       setTurns((ts) => ts.map((t) => (t.id === id ? newTurn(id, question) : t)));
     } else {
       setTurns((ts) => [...ts, newTurn(id, question)]);
     }
-    void run(id, question, before);
+    runningRef.current = true;
+    void run(id, question, before, mode);
+    return id;
   };
 
   const send = () => {
@@ -220,6 +285,7 @@ export function Chat() {
   };
 
   const onPlaying = (el: HTMLAudioElement) => {
+    engine.stop();
     if (current.current && current.current !== el) current.current.pause();
     current.current = el;
   };
@@ -237,7 +303,7 @@ export function Chat() {
                   Hi, I&apos;m Jeffy.
                 </p>
                 <p className="text-[15px] text-ink-muted">
-                  Ask anything. I&apos;ll think it through and answer out loud.
+                  Ask me anything.
                 </p>
               </div>
               <div className="flex w-full flex-col items-center gap-2">
@@ -254,7 +320,8 @@ export function Chat() {
               key={t.id}
               turn={t}
               busy={running}
-              onRegenerate={() => ask(t.question, t.id)}
+              engine={engine}
+              onRegenerate={() => ask(t.question, { replaceId: t.id })}
               onPlaying={onPlaying}
               onVoiceFailed={() =>
                 patch(t.id, (x) => ({
@@ -289,6 +356,19 @@ export function Chat() {
                 {draft.length}/{MAX_QUESTION_CHARS}
               </span>
             )}
+            <button
+              ref={talkButton}
+              type="button"
+              aria-label="Talk to Jeffy"
+              onClick={(e) => {
+                e.stopPropagation();
+                engine.unlock();
+                setTalkOpen(true);
+              }}
+              className="inline-flex size-11 shrink-0 items-center justify-center rounded-full text-ink transition-[background-color,transform] duration-150 ease-out hover:bg-surface active:scale-95"
+            >
+              <WaveformIcon />
+            </button>
             {running ? (
               <button
                 type="button"
@@ -296,6 +376,7 @@ export function Chat() {
                 onClick={(e) => {
                   e.stopPropagation();
                   abort.current?.abort();
+                  engine.stop();
                 }}
                 className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-surface text-ink transition-[background-color,transform] duration-150 ease-out hover:bg-track active:scale-95"
               >
@@ -317,10 +398,24 @@ export function Chat() {
             )}
           </PromptInputActions>
         </PromptInput>
-        <p className="mt-2 text-center text-xs text-ink-muted">
-          Replies and voice are AI-generated.
-        </p>
       </div>
+      {talkOpen && (
+        <TalkView
+          engine={engine}
+          turns={turns}
+          onUtterance={(text) => ask(text, { mode: "talk" })}
+          onInterrupt={() => {
+            abort.current?.abort();
+            engine.stop();
+          }}
+          onClose={() => {
+            abort.current?.abort();
+            engine.stop();
+            setTalkOpen(false);
+            requestAnimationFrame(() => talkButton.current?.focus());
+          }}
+        />
+      )}
     </>
   );
 }

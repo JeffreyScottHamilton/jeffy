@@ -25,14 +25,14 @@ function mapError(e: unknown): Error {
   return new ModelError("Model request failed");
 }
 
-export type ReplyChunk = { kind: "reasoning" | "text"; delta: string };
+export type ReplyChunk = { kind: "text"; delta: string };
 
 export const MAX_OUTPUT_TOKENS = 1024; // thinking tokens count against this budget
 
-/** Streams thought summaries and answer text. Throws a JeffyError subclass on failure. */
+/** Streams answer text. Throws a JeffyError subclass on failure. */
 export async function* streamReply(
   prompt: Prompt,
-  { apiKey, timeoutMs }: { apiKey: string; timeoutMs: number },
+  { apiKey, timeoutMs, signal }: { apiKey: string; timeoutMs: number; signal?: AbortSignal },
 ): AsyncGenerator<ReplyChunk> {
   const ai = new GoogleGenAI({ apiKey });
   try {
@@ -43,14 +43,14 @@ export async function* streamReply(
         systemInstruction: prompt.systemInstruction,
         maxOutputTokens: MAX_OUTPUT_TOKENS,
         temperature: 0.6,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW, includeThoughts: true },
-        abortSignal: AbortSignal.timeout(timeoutMs),
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL, includeThoughts: false },
+        abortSignal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
       },
     });
     for await (const chunk of stream) {
       for (const part of chunk.candidates?.[0]?.content?.parts ?? []) {
-        if (!part.text) continue;
-        yield { kind: part.thought === true ? "reasoning" : "text", delta: part.text };
+        if (!part.text || part.thought === true) continue;
+        yield { kind: "text", delta: part.text };
       }
     }
   } catch (e) {

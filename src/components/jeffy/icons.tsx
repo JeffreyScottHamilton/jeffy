@@ -94,3 +94,37 @@ export function ArrowDownIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function WaveformIcon({ className }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M4 10v4M8 6.5v11M12 3.5v17M16 7.5v9M20 10v4" />
+    </svg>
+  );
+}
+
+export function MicIcon({ className }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" />
+    </svg>
+  );
+}
+
+export function MicOffIcon({ className }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M15 9.3V6a3 3 0 0 0-5.7-1.3M9 9v2a3 3 0 0 0 4.6 2.5" />
+      <path d="M5.5 11.5a6.5 6.5 0 0 0 10.2 5.3M18.5 11.5c0 .9-.2 1.7-.5 2.4M12 18v3M4 4l16 16" />
+    </svg>
+  );
+}
+
+export function CloseIcon({ className }: IconProps) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M6 6l12 12M18 6 6 18" />
+    </svg>
+  );
+}
