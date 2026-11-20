@@ -1,0 +1,64 @@
+# Authenticated gateway in front of VoiceStudio.
+# VoiceStudio (127.0.0.1:3900) -> this Caddy (127.0.0.1:8787) -> Tailscale Funnel (public HTTPS).
+# VoiceStudio never gates loopback requests, so this file IS the auth boundary.
+# Run with: VOICESTUDIO_AUTH_TOKEN=... caddy run --config deploy/gateway/Caddyfile --adapter caddyfile
+# (see docs/voicestudio.md; refuse to start if the token is short or unset)
+{
+	admin off
+	auto_https off
+}
+
+http://127.0.0.1:8787 {
+	bind 127.0.0.1
+
+	route {
+		# Cap request bodies (speech requests are small JSON).
+		request_body {
+			max_size 64KB
+		}
+
+		# Exact token match, plus a guard so an empty env var cannot match "Bearer ".
+		@authorized {
+			header Authorization "Bearer {$VOICESTUDIO_AUTH_TOKEN}"
+			header_regexp bearer Authorization "^Bearer [^ ]+$"
+		}
+		handle @authorized {
+			# Default deny: only these two routes reach VoiceStudio.
+			@allowed {
+				method POST
+				path /v1/audio/speech
+			}
+			@health {
+				method GET
+				path /health
+			}
+			handle @allowed {
+				import proxy
+			}
+			handle @health {
+				import proxy
+			}
+			handle {
+				respond "Not found" 404
+			}
+		}
+		handle {
+			respond "Unauthorized" 401
+		}
+	}
+}
+
+(proxy) {
+	reverse_proxy 127.0.0.1:3900 {
+		flush_interval -1
+		header_up -Authorization
+		header_up -Forwarded
+		header_up -X-Forwarded-For
+		header_up -X-Forwarded-Host
+		header_up -X-Forwarded-Proto
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 120s
+		}
+	}
+}
