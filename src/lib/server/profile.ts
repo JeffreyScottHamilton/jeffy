@@ -145,7 +145,55 @@ function tokens(text: string): string[] {
     .map((t) => (t.length > 3 && t.endsWith("s") && !t.endsWith("ss") ? t.slice(0, -1) : t));
 }
 
-export function selectRelevant(profile: Profile, question: string, history: Turn[]): ProfileExcerpt {
+const DEFAULT_TIMEZONE = "America/Denver";
+
+export function resolveTimeZone(env: NodeJS.ProcessEnv = process.env): string {
+  const tz = env.JEFFY_TIMEZONE?.trim() || DEFAULT_TIMEZONE;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    return DEFAULT_TIMEZONE;
+  }
+}
+
+// Calendar date in `timeZone` for `now`, shifted by `offsetDays`, as a UTC-midnight Date.
+function localDate(now: Date, timeZone: string, offsetDays: number): Date {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "numeric", day: "numeric" })
+    .formatToParts(now);
+  const n = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return new Date(Date.UTC(n("year"), n("month") - 1, n("day") + offsetDays));
+}
+
+const monthDay = (d: Date) =>
+  new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "long", day: "numeric" }).format(d);
+
+export function formatToday(now: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  }).format(localDate(now, timeZone, 0));
+}
+
+function relativeDates(question: string, now: Date, timeZone: string): RegExp[] {
+  const q = question.toLowerCase();
+  const offsets = new Set<number>();
+  if (/\b(yesterday|last night)\b/.test(q)) offsets.add(-1);
+  if (/\b(today|tonight|this morning)\b/.test(q)) offsets.add(0);
+  return [...offsets].map((o) => new RegExp(`\\b${monthDay(localDate(now, timeZone, o))}(?!\\d)`));
+}
+
+export function selectRelevant(
+  profile: Profile,
+  question: string,
+  history: Turn[],
+  now: Date = new Date(),
+  timeZone: string = resolveTimeZone(),
+): ProfileExcerpt {
+  const dates = relativeDates(question, now, timeZone);
   const q = new Set(tokens(question));
   const lastQ = history.length ? new Set(tokens(history[history.length - 1].question)) : new Set<string>();
   const score = (parts: string[]) => {
@@ -164,7 +212,7 @@ export function selectRelevant(profile: Profile, question: string, history: Turn
       kind,
       topic: i.topic,
       text: i.text,
-      score: score([...i.keywords, i.topic, i.text]),
+      score: score([...i.keywords, i.topic, i.text]) + (dates.some((re) => re.test(i.text)) ? 4 : 0),
     }))
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)

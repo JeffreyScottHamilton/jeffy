@@ -9,10 +9,12 @@ export function buildPrompt(
   excerpt: ProfileExcerpt,
   history: Turn[],
   question: string,
+  today?: string,
 ): { systemInstruction: string; contents: { role: "user" | "model"; parts: { text: string }[] }[] } {
   const { name } = excerpt;
   const lines: string[] = [
     `You are Jeffy, speaking aloud as ${name} in first person, in their style: ${excerpt.style}`,
+    ...(today ? [`Today is ${today}.`] : []),
     `Rules:`,
     `- Use ONLY the profile excerpt below for personal facts, opinions and preferences.`,
     `- If the question is about ${name}'s life, opinions or preferences and the excerpt does not support an answer, reply exactly: ${UNKNOWN_REPLY(name)}`,

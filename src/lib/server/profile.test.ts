@@ -34,6 +34,29 @@ describe("selectRelevant", () => {
   });
 });
 
+describe("selectRelevant relative dates", () => {
+  const item = (text: string) => ({ topic: "diary", keywords: [], text });
+  const withDays = async () => ({
+    ...(await example()),
+    facts: [item("November 1, 2026: went hiking."), item("November 19, 2026: baked bread."), item("November 20, 2026: wrote code.")],
+    preferences: [],
+  });
+  const now = new Date("2026-11-20T18:00:00Z");
+  it("selects yesterday's entry and not a prefix-matching day", async () => {
+    const ex = selectRelevant(await withDays(), "what happened yesterday?", [], now, "America/Denver");
+    expect(ex.items.map((i) => i.text)).toEqual(["November 19, 2026: baked bread."]);
+  });
+  it("selects today's entry", async () => {
+    const ex = selectRelevant(await withDays(), "what did you do today?", [], now, "America/Denver");
+    expect(ex.items.map((i) => i.text)).toEqual(["November 20, 2026: wrote code."]);
+  });
+  it("uses the timezone for the local date", async () => {
+    const late = new Date("2026-11-20T03:00:00Z"); // Nov 19 evening in Denver
+    const ex = selectRelevant(await withDays(), "what happened today?", [], late, "America/Denver");
+    expect(ex.items.map((i) => i.text)).toEqual(["November 19, 2026: baked bread."]);
+  });
+});
+
 describe("parseProfile", () => {
   it("rejects bad shapes without echoing values", () => {
     const secret = "SUPER-SECRET-VALUE";

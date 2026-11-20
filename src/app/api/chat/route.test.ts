@@ -4,6 +4,7 @@ vi.mock("@/lib/server/gemini", () => ({ generateReply: vi.fn(), GEMINI_MODEL: "x
 vi.mock("@/lib/server/voicestudio", () => ({ synthesize: vi.fn() }));
 vi.mock("@/lib/server/gradium", () => ({ synthesizeGradium: vi.fn() }));
 
+import { authToken } from "@/lib/server/auth";
 import { RateLimitError, VoiceOfflineError, VoiceTimeoutError } from "@/lib/server/errors";
 import { generateReply } from "@/lib/server/gemini";
 import { synthesizeGradium } from "@/lib/server/gradium";
@@ -32,6 +33,28 @@ afterEach(() => {
 });
 
 const logged = () => JSON.stringify(errSpy.mock.calls);
+
+describe("POST /api/chat password gate", () => {
+  it("401 without a valid cookie when JEFFY_PASSWORD is set", async () => {
+    vi.stubEnv("JEFFY_PASSWORD", "fake-test-password");
+    const r = await post({ question: QUESTION });
+    expect(r.status).toBe(401);
+    expect((await r.json()).error.code).toBe("unauthorized");
+    expect(generateReply).not.toHaveBeenCalled();
+  });
+  it("passes with the valid cookie", async () => {
+    vi.stubEnv("JEFFY_PASSWORD", "fake-test-password");
+    const token = await authToken("fake-test-password");
+    const r = await POST(
+      new Request("http://localhost/api/chat", {
+        method: "POST",
+        headers: { cookie: `jeffy_auth=${token}` },
+        body: JSON.stringify({ question: QUESTION }),
+      }),
+    );
+    expect(r.status).toBe(200);
+  });
+});
 
 describe("POST /api/chat", () => {
   it("400 on empty / whitespace / non-string / bad JSON", async () => {

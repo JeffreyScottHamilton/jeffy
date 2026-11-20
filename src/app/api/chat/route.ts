@@ -6,10 +6,11 @@ import {
   type ChatErrorBody,
   type ErrorCode,
 } from "@/lib/api-types";
+import { requestAuthorized } from "@/lib/server/auth";
 import { readConfig } from "@/lib/server/config";
 import { JeffyError } from "@/lib/server/errors";
 import { generateReply } from "@/lib/server/gemini";
-import { loadProfile, ProfileError, selectRelevant } from "@/lib/server/profile";
+import { formatToday, loadProfile, ProfileError, resolveTimeZone, selectRelevant } from "@/lib/server/profile";
 import { buildPrompt, type Turn } from "@/lib/server/prompt";
 import { synthesizeGradium } from "@/lib/server/gradium";
 import { synthesize } from "@/lib/server/voicestudio";
@@ -32,6 +33,7 @@ const MESSAGES: Record<ErrorCode, string> = {
   voice_auth: "The voice service rejected Jeffy's credentials. Check the voice API key or token.",
   voice_config: "Jeffy's voice isn't set up correctly. Check the voice id (GRADIUM_VOICE_ID or VOICESTUDIO_VOICE_ID).",
   voice_quota: "The free voice allowance is used up for this month.",
+  unauthorized: "Locked. Reload the page and enter the password.",
   internal: "Something went wrong. Try again.",
 };
 
@@ -91,6 +93,7 @@ function toBase64Url(s: string): string {
 
 export async function POST(request: Request): Promise<Response> {
   try {
+    if (!(await requestAuthorized(request))) return errorResponse("unauthorized", 401, false);
     let text: string;
     try {
       text = await request.text();
@@ -123,8 +126,10 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const { profile } = await loadProfile();
-    const excerpt = selectRelevant(profile, question, history);
-    const prompt = buildPrompt(excerpt, history, question);
+    const now = new Date();
+    const timeZone = resolveTimeZone();
+    const excerpt = selectRelevant(profile, question, history, now, timeZone);
+    const prompt = buildPrompt(excerpt, history, question, formatToday(now, timeZone));
     const reply = await generateReply(prompt, {
       apiKey: cfg.config.geminiApiKey,
       timeoutMs: cfg.config.geminiTimeoutMs,
