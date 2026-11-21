@@ -1,18 +1,27 @@
 import "server-only";
 import {
+  ATTACHMENT_MIMES,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS,
+  MAX_HISTORY_TURN_CHARS,
   MAX_HISTORY_TURNS,
   MAX_QUESTION_CHARS,
+  type Attachment,
+  type AttachmentMime,
   type ChatErrorBody,
   type ChatEvent,
   type ChatMode,
   type ErrorCode,
+  type HistoryTurn,
+  type SourceRef,
 } from "@/lib/api-types";
-import { readConfig } from "@/lib/server/config";
+import { readConfig, type VoiceConfigResult } from "@/lib/server/config";
 import { JeffyError } from "@/lib/server/errors";
 import { cleanReply, streamReply } from "@/lib/server/gemini";
-import { formatToday, loadProfile, ProfileError, resolveTimeZone, selectRelevant } from "@/lib/server/profile";
-import { buildPrompt, type Turn } from "@/lib/server/prompt";
+import { buildPrompt } from "@/lib/server/prompt";
+import { SpeechFilter, toSpeech } from "@/lib/server/speakable";
 import { streamGradium } from "@/lib/server/gradium";
+import { formatToday, resolveTimeZone } from "@/lib/server/time";
 import { synthesize } from "@/lib/server/voicestudio";
 import { TextQueue } from "./text-queue";
 
@@ -20,17 +29,19 @@ export const maxDuration = 60;
 // `dynamic` and `runtime` are omitted: both are rejected under cacheComponents (Next 16); nodejs is the default
 // and POST handlers are never cached.
 
-const MAX_BODY_BYTES = 16 * 1024;
-const MAX_TURN_CHARS = 500;
+/** Vercel caps request bodies at 4.5 MB; stay just under it. */
+const MAX_BODY_BYTES = Math.floor(4.4 * 1024 * 1024);
+const MAX_ATTACHMENT_NAME_CHARS = 200;
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
 const MESSAGES: Record<ErrorCode, string> = {
-  invalid_request: "Type a question first.",
+  invalid_request: "Type a message first.",
   config_missing: "Jeffy isn't fully set up yet.",
-  rate_limited: "Jeffy is getting too many questions right now. Try again in a moment.",
-  model_error: "Jeffy couldn't think of an answer. Try again.",
-  voice_offline: "Jeffy's voice service is offline. Try again when it's back.",
-  voice_timeout: "Jeffy's voice took too long to answer. Try again.",
-  voice_busy: "Jeffy's voice service is busy. Try again in a moment.",
+  rate_limited: "Jeffy is getting too many requests right now. Try again in a moment.",
+  model_error: "Jeffy couldn't come up with an answer. Try again.",
+  voice_offline: "The voice service is offline. Try again when it's back.",
+  voice_timeout: "The voice took too long to answer. Try again.",
+  voice_busy: "The voice service is busy. Try again in a moment.",
   voice_auth: "The voice service rejected Jeffy's credentials. Check the voice API key or token.",
   voice_config: "Jeffy's voice isn't set up correctly. Check the voice id (GRADIUM_VOICE_ID or VOICESTUDIO_VOICE_ID).",
   voice_quota: "The free voice allowance is used up for this month.",
@@ -65,33 +76,63 @@ function errorResponse(
 
 const invalid = (message?: string) => errorResponse("invalid_request", 400, false, { message });
 
-// Truncate by code points so a surrogate pair is never split.
-const truncate = (s: string) => Array.from(s).slice(0, MAX_TURN_CHARS).join("");
+class Invalid extends Error {}
 
-function parseHistory(raw: unknown): Turn[] {
+// Truncate by code points so a surrogate pair is never split.
+const truncate = (s: string) =>
+  s.length <= MAX_HISTORY_TURN_CHARS ? s : Array.from(s).slice(0, MAX_HISTORY_TURN_CHARS).join("");
+
+function parseHistory(raw: unknown): HistoryTurn[] {
   if (!Array.isArray(raw)) return [];
-  const turns: Turn[] = [];
+  const turns: HistoryTurn[] = [];
   for (const t of raw) {
-    if (
-      t &&
-      typeof t === "object" &&
-      typeof (t as Turn).question === "string" &&
-      typeof (t as Turn).reply === "string"
-    ) {
-      turns.push({
-        question: truncate((t as Turn).question),
-        reply: truncate((t as Turn).reply),
-      });
+    const o = t as Partial<HistoryTurn> | null;
+    if (o && typeof o === "object" && typeof o.question === "string" && typeof o.reply === "string") {
+      turns.push({ question: truncate(o.question), reply: truncate(o.reply) });
     }
   }
   return turns.slice(-MAX_HISTORY_TURNS);
 }
 
+function decodedBytes(b64: string): number {
+  const pad = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+  return (b64.length / 4) * 3 - pad;
+}
+
+function parseAttachments(raw: unknown): Attachment[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new Invalid("Attachments must be a list.");
+  if (raw.length > MAX_ATTACHMENTS) throw new Invalid(`Attach at most ${MAX_ATTACHMENTS} files.`);
+  let total = 0;
+  return raw.map((a): Attachment => {
+    const o = a as Record<string, unknown> | null;
+    if (!o || typeof o !== "object") throw new Invalid("That attachment is invalid.");
+    const { name, mime, data } = o;
+    if (typeof name !== "string" || !name.trim() || name.length > MAX_ATTACHMENT_NAME_CHARS) {
+      throw new Invalid(`Attachment names must be 1-${MAX_ATTACHMENT_NAME_CHARS} characters.`);
+    }
+    if (typeof mime !== "string" || !ATTACHMENT_MIMES.includes(mime as AttachmentMime)) {
+      throw new Invalid("Attach images (PNG, JPEG, WebP, GIF), PDFs, or plain text / markdown files.");
+    }
+    if (typeof data !== "string" || !data || data.length % 4 !== 0 || !BASE64.test(data)) {
+      throw new Invalid("That attachment could not be read.");
+    }
+    total += decodedBytes(data);
+    if (total > MAX_ATTACHMENT_BYTES) {
+      throw new Invalid(`Attachments must total ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB or less.`);
+    }
+    return { name: name.trim(), mime: mime as AttachmentMime, data };
+  });
+}
+
+function optionalBool(v: unknown): boolean | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "boolean") throw new Invalid();
+  return v;
+}
+
 const encoder = new TextEncoder();
 const line = (e: ChatEvent) => encoder.encode(`${JSON.stringify(e)}\n`);
-
-// Stream-time cleanup of markdown characters; the final reply goes through cleanReply.
-const cleanDelta = (s: string) => s.replace(/[*_#`]/g, "");
 
 function failure(e: unknown, fallback: ErrorCode): { code: ErrorCode; message: string; retryable: boolean } {
   if (e instanceof JeffyError) {
@@ -107,8 +148,21 @@ function failure(e: unknown, fallback: ErrorCode): { code: ErrorCode; message: s
   return { code: fallback, message: MESSAGES[fallback], retryable: true };
 }
 
+function voiceConfigFailure(v: Extract<VoiceConfigResult, { ok: false }>): ChatEvent {
+  const detail = [...(v.missing.length ? [`Missing: ${v.missing.join(", ")}.`] : []), ...v.problems.map((p) => `${p}.`)];
+  console.error("[jeffy] voice not configured", { code: "voice_config" });
+  return {
+    type: "audio_error",
+    code: "voice_config",
+    message: `Jeffy's voice isn't set up. ${detail.join(" ")}`.trim(),
+    retryable: false,
+  };
+}
+
 export async function POST(request: Request): Promise<Response> {
   try {
+    const declared = Number(request.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return invalid("That request is too large.");
     let text: string;
     try {
       text = await request.text();
@@ -122,55 +176,65 @@ export async function POST(request: Request): Promise<Response> {
     } catch {
       return invalid();
     }
-    const obj = json && typeof json === "object" ? (json as Record<string, unknown>) : null;
+    const obj = json && typeof json === "object" && !Array.isArray(json) ? (json as Record<string, unknown>) : null;
     if (!obj || typeof obj.question !== "string") return invalid();
     const question = obj.question.trim();
     if (!question) return invalid();
-    if (question.length > MAX_QUESTION_CHARS) return invalid(`Keep questions under ${MAX_QUESTION_CHARS} characters.`);
-    const history = parseHistory(obj.history);
+    if (question.length > MAX_QUESTION_CHARS) return invalid(`Keep messages under ${MAX_QUESTION_CHARS} characters.`);
     if (obj.mode !== undefined && obj.mode !== "text" && obj.mode !== "talk") return invalid();
     const mode: ChatMode = obj.mode === "talk" ? "talk" : "text";
+    let attachments: Attachment[];
+    let wantsVoice: boolean;
+    let search: boolean;
+    let think: boolean;
+    try {
+      attachments = parseAttachments(obj.attachments);
+      wantsVoice = mode === "talk" || optionalBool(obj.voice) === true;
+      search = optionalBool(obj.search) ?? false;
+      const thinkOpt = optionalBool(obj.think);
+      think = mode === "talk" ? false : (thinkOpt ?? true);
+    } catch (e) {
+      if (e instanceof Invalid) return invalid(e.message || undefined);
+      throw e;
+    }
+    const history = parseHistory(obj.history);
 
     const cfg = readConfig();
     if (!cfg.ok) {
-      const detail = [
-        ...(cfg.missing.length ? [`Missing: ${cfg.missing.join(", ")}.`] : []),
-        ...cfg.problems.map((p) => `${p}.`),
-      ];
       return errorResponse("config_missing", 503, false, {
-        message: `Jeffy isn't fully set up yet. ${detail.join(" ")}`.trim(),
+        message: `Jeffy isn't fully set up yet. Missing: ${cfg.missing.join(", ")}.`,
       });
     }
-
-    const { profile } = await loadProfile();
-    const now = new Date();
-    const timeZone = resolveTimeZone();
-    const excerpt = selectRelevant(profile, question, history, now, timeZone);
-    const prompt = buildPrompt(excerpt, history, question, formatToday(now, timeZone));
-    if (mode === "talk") {
-      prompt.systemInstruction +=
-        "\nThis is a live spoken conversation: answer in one or two short, natural sentences, like talking to a friend.";
-    }
     const config = cfg.config;
+    const voiceCfg = wantsVoice ? config.voice : undefined;
+
+    const now = new Date();
+    const prompt = buildPrompt({
+      question,
+      history,
+      attachments,
+      today: formatToday(now, resolveTimeZone()),
+      mode,
+    });
     let cancelled = false;
     const ctrl = new AbortController();
-    const MAX_SPOKEN_CHARS = 600; // matches cleanReply's cap
     const body = new ReadableStream<Uint8Array>({
       async start(controller) {
         const send = (e: ChatEvent) => {
           if (!cancelled) controller.enqueue(line(e));
         };
-        const streaming = config.voiceProvider === "gradium";
+        const voice = voiceCfg?.ok ? voiceCfg.config : undefined;
+        const streaming = voice?.provider === "gradium";
+        const speech = new SpeechFilter();
         let queue: TextQueue | undefined;
-        let voice: Promise<void> | undefined;
-        let spoken = 0;
+        let voiceTask: Promise<void> | undefined;
 
-        // Starts on the first answer text so the Gradium deadline does not run while Gemini is still thinking.
+        // Starts on the first speakable text so the Gradium deadline does not run while Gemini is still thinking.
         const startVoice = () => {
           const q = (queue = new TextQueue());
-          voice = (async () => {
+          voiceTask = (async () => {
             try {
-              const { sampleRate, chunks } = await streamGradium(q, config.gradium, { signal: ctrl.signal });
+              const { sampleRate, chunks } = await streamGradium(q, voice!.gradium, { signal: ctrl.signal });
               let any = false;
               for await (const c of chunks) {
                 if (cancelled || ctrl.signal.aborted) return;
@@ -185,50 +249,69 @@ export async function POST(request: Request): Promise<Response> {
             }
           })();
         };
+        const speak = (piece: string) => {
+          if (!streaming || !piece) return;
+          if (!queue) startVoice();
+          queue!.push(piece);
+        };
+        const stopVoice = async () => {
+          ctrl.abort();
+          queue?.end();
+          await voiceTask;
+        };
 
         try {
           let raw = "";
+          let sources: SourceRef[] | undefined;
           try {
             for await (const chunk of streamReply(prompt, {
               apiKey: config.geminiApiKey,
               timeoutMs: config.geminiTimeoutMs,
               signal: ctrl.signal,
+              think,
+              search,
             })) {
               if (cancelled) return;
-              raw += chunk.delta;
-              const delta = cleanDelta(chunk.delta);
-              if (!delta) continue;
-              send({ type: "text", delta });
-              if (streaming && spoken < MAX_SPOKEN_CHARS) {
-                if (!queue) startVoice();
-                const piece = delta.slice(0, MAX_SPOKEN_CHARS - spoken);
-                spoken += piece.length;
-                queue!.push(piece);
+              if (chunk.kind === "reasoning") {
+                if (chunk.delta) send({ type: "reasoning", delta: chunk.delta });
+              } else if (chunk.kind === "search") {
+                send({ type: "search", queries: chunk.queries });
+              } else if (chunk.kind === "sources") {
+                sources = chunk.sources;
+              } else if (chunk.delta) {
+                raw += chunk.delta;
+                send({ type: "text", delta: chunk.delta });
+                speak(speech.push(chunk.delta));
               }
             }
           } catch (e) {
-            ctrl.abort();
-            queue?.end();
-            await voice;
+            await stopVoice();
             send({ type: "error", ...failure(e, "model_error") });
             return;
           }
           const reply = cleanReply(raw);
           if (!reply) {
-            ctrl.abort();
-            queue?.end();
-            await voice;
+            await stopVoice();
             send({ type: "error", ...failure(null, "model_error") });
             return;
           }
           send({ type: "text_done", text: reply });
-          if (streaming) {
-            queue?.end();
-            await voice;
+          if (sources?.length) send({ type: "sources", sources });
+          if (!voiceCfg) return;
+          if (!voiceCfg.ok) {
+            send(voiceConfigFailure(voiceCfg));
             return;
           }
+          if (streaming) {
+            speak(speech.end());
+            queue?.end();
+            await voiceTask;
+            return;
+          }
+          const spoken = toSpeech(reply);
+          if (!spoken) return;
           try {
-            const { audio, contentType } = await synthesize(reply, config.voicestudio);
+            const { audio, contentType } = await synthesize(spoken, voice!.voicestudio);
             send({ type: "audio", mime: contentType, data: Buffer.from(audio).toString("base64") });
           } catch (e) {
             send({ type: "audio_error", ...failure(e, "internal") });
@@ -258,17 +341,6 @@ export async function POST(request: Request): Promise<Response> {
         message,
         retryAfterSeconds: e.retryAfterSeconds ?? (e.code === "rate_limited" ? 10 : undefined),
         upstreamStatus: e.upstreamStatus,
-      });
-    }
-    if (e instanceof ProfileError) {
-      const where =
-        e.source === "env"
-          ? "JEFFY_PROFILE_JSON"
-          : e.source === "file"
-            ? "profile/profile.private.json"
-            : "the example profile";
-      return errorResponse("config_missing", 503, false, {
-        message: `Jeffy isn't fully set up yet. ${where} is invalid.`,
       });
     }
     return errorResponse("internal", 500, true);

@@ -10,13 +10,20 @@ export type VoiceStudioConfig = {
 };
 export type GradiumConfig = { apiKey: string; voiceId: string; timeoutMs: number };
 export type VoiceProvider = "gradium" | "voicestudio";
-export type JeffyConfig = {
-  geminiApiKey: string;
-  voiceProvider: VoiceProvider;
+export type VoiceConfig = {
+  provider: VoiceProvider;
   voicestudio: VoiceStudioConfig;
   gradium: GradiumConfig;
-  geminiTimeoutMs: number;
 };
+/** Voice settings are checked separately: they only matter when a request asks for voice. */
+export type VoiceConfigResult = { ok: true; config: VoiceConfig } | { ok: false; missing: string[]; problems: string[] };
+export type JeffyConfig = {
+  geminiApiKey: string;
+  geminiTimeoutMs: number;
+  voice: VoiceConfigResult;
+};
+
+export const DEFAULT_GEMINI_TIMEOUT_MS = 50000;
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
 
@@ -25,16 +32,26 @@ function num(v: string | undefined, fallback: number): number {
   return v && Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 
+/** Text chat needs only GOOGLE_GENERATIVE_AI_API_KEY; voice problems are reported in `config.voice`. */
 export function readConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): { ok: true; config: JeffyConfig } | { ok: false; missing: string[]; problems: string[] } {
+  const geminiApiKey = env.GOOGLE_GENERATIVE_AI_API_KEY?.trim();
+  if (!geminiApiKey) return { ok: false, missing: ["GOOGLE_GENERATIVE_AI_API_KEY"], problems: [] };
+  return {
+    ok: true,
+    config: {
+      geminiApiKey,
+      geminiTimeoutMs: num(env.GEMINI_TIMEOUT_MS?.trim(), DEFAULT_GEMINI_TIMEOUT_MS),
+      voice: readVoiceConfig(env),
+    },
+  };
+}
+
+export function readVoiceConfig(env: NodeJS.ProcessEnv = process.env): VoiceConfigResult {
   const get = (k: string) => env[k]?.trim() || undefined;
   const missing: string[] = [];
   const problems: string[] = [];
-
-  const geminiApiKey = get("GOOGLE_GENERATIVE_AI_API_KEY");
-  if (!geminiApiKey) missing.push("GOOGLE_GENERATIVE_AI_API_KEY");
-
   const rawProvider = get("VOICE_PROVIDER")?.toLowerCase();
   let provider: VoiceProvider = get("GRADIUM_API_KEY") ? "gradium" : "voicestudio";
   if (rawProvider === "gradium" || rawProvider === "voicestudio") provider = rawProvider;
@@ -84,9 +101,7 @@ export function readConfig(
   return {
     ok: true,
     config: {
-      geminiApiKey: geminiApiKey!,
-      geminiTimeoutMs: num(get("GEMINI_TIMEOUT_MS"), 15000),
-      voiceProvider: provider,
+      provider,
       voicestudio: {
         baseUrl,
         voiceId: voiceId ?? "",

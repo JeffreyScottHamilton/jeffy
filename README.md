@@ -1,46 +1,46 @@
 # Jeffy
 
-Jeffy answers typed questions with streamed text and a voice reply in the owner's cloned voice. While the model is working the answer shows "Thinking about it…"; the voice starts playing while the text is still being written, and a player at the bottom of the message supports pause, seek and replay once it has finished. The Talk button opens a hands-free voice conversation (browser speech recognition, barge-in by speaking over Jeffy; needs Chrome, Edge or Safari and microphone access). The UI is always dark. There is no in-app sign-in: keep a private deployment behind Vercel Deployment Protection (see [docs/deploy-vercel.md](docs/deploy-vercel.md)).
+Jeffy is a general AI chat assistant: ask anything and get a streamed markdown answer (tables, code blocks with syntax highlighting, live JSX previews), with Gemini's reasoning summary shown while it thinks, optional Google Search grounding (the search queries and sources are shown), and file attachments (images, PDF, plain text, markdown). Chats are kept in your browser's localStorage. A voice toggle (off by default) speaks replies in a cloned voice, starting while the text is still being written; the Talk button opens a hands-free voice conversation (browser speech recognition, barge-in by speaking over Jeffy; needs Chrome, Edge or Safari and microphone access). The UI is always dark. There is no in-app sign-in: keep a private deployment behind Vercel Deployment Protection (see [docs/deploy-vercel.md](docs/deploy-vercel.md)).
 
 ## Architecture
 
 ```
-Browser --POST /api/chat {question, history, mode: text|talk}--> Jeffy (Next.js on Vercel)
-                              |-- selects profile excerpts, streams Gemini (gemini-3.5-flash-lite, minimal thinking)
-                              '-- pipes the reply text, as it arrives, into Gradium streaming TTS (default, WebSocket)
-                                    or, optionally, sends the final reply to self-hosted VoiceStudio POST /v1/audio/speech
-Browser <-- NDJSON events: text, text_done, audio_chunk (PCM s16le 24 kHz), audio_end, audio (VoiceStudio only), audio_error, error --'
+Browser --POST /api/chat {question, history, mode: text|talk, voice, search, think, attachments}--> Jeffy (Next.js on Vercel)
+                              |-- streams Gemini (gemini-3.5-flash-lite): thought summaries when think is on (LOW),
+                              |   Google Search grounding when search is on, attachments as inline data on the current turn
+                              '-- only when voice is on (or in Talk mode): makes the markdown speakable (code blocks
+                                    skipped, links and URLs dropped, max 1500 chars) and pipes it, as it arrives, into
+                                    Gradium streaming TTS (default, WebSocket), or sends it after the reply to
+                                    self-hosted VoiceStudio POST /v1/audio/speech
+Browser <-- NDJSON events: reasoning, search, text (markdown), text_done, sources, audio_chunk (PCM s16le 24 kHz),
+            audio_end, audio (VoiceStudio only), audio_error, error --'
 ```
+
+Limits per request: question 4000 characters; the last 12 turns of history, 6000 characters each; up to 4 attachments
+(PNG, JPEG, WebP, GIF, PDF, text/plain, text/markdown), 3 MB decoded in total; request body 4.4 MB.
 
 ## Quick start (local)
 
-Default voice provider: [Gradium](docs/gradium.md) (hosted; no computer needs to stay on).
+Text chat needs only a Gemini key from Google AI Studio (`GOOGLE_GENERATIVE_AI_API_KEY`). Voice is optional; the
+default voice provider is [Gradium](docs/gradium.md) (hosted; no computer needs to stay on).
 
-1. Get a free key at [gradium.ai](https://gradium.ai) and a Gemini key from Google AI Studio.
-2. Clone your voice: `GRADIUM_API_KEY=... npm run clone:gradium -- recording.wav "My voice"` (or use the Gradium web app). It prints a voice uid.
-3. Set three variables in `.env.local`: `GOOGLE_GENERATIVE_AI_API_KEY`, `GRADIUM_API_KEY`, `GRADIUM_VOICE_ID`.
+1. Get a Gemini key from Google AI Studio (and, for voice, a free key at [gradium.ai](https://gradium.ai)).
+2. For voice, clone your voice: `GRADIUM_API_KEY=... npm run clone:gradium -- recording.wav "My voice"` (or use the Gradium web app). It prints a voice uid.
+3. Set `GOOGLE_GENERATIVE_AI_API_KEY` in `.env.local`, plus `GRADIUM_API_KEY` and `GRADIUM_VOICE_ID` for voice.
 
 ```bash
 npm install
-cp .env.example .env.local        # fill in the three variables above
+cp .env.example .env.local        # fill in the variables above
 npm run dev
 ```
+
+If voice is turned on without voice variables, the text answer still arrives and the voice reports `voice_config`.
 
 To try a built-in voice first: `GRADIUM_API_KEY=... npm run voices:gradium`, then use one of the uids.
 
 Optional, self-hosted: VoiceStudio on your own computer. Set `VOICE_PROVIDER=voicestudio` and see [docs/voicestudio.md](docs/voicestudio.md) (or `npm run mock:voicestudio` for a fake chime).
 
 Open http://localhost:3000.
-
-## Profile
-
-Jeffy answers personal questions only from a profile you write. Without one it uses the fictional `profile/example.profile.json`.
-
-```bash
-cp profile/example.profile.json profile/profile.private.json   # gitignored; edit it
-```
-
-On Vercel set `JEFFY_PROFILE_JSON` instead (one-line JSON). Preview deployments always use the example.
 
 ## Scripts
 
@@ -62,35 +62,35 @@ All are server-only. Set them in `.env.local` locally and in Vercel Project Sett
 | --- | --- | --- | --- | --- |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | yes | your Gemini key | same (Sensitive) | Production, Preview |
 | `VOICE_PROVIDER` | no | `gradium` if `GRADIUM_API_KEY` is set, else `voicestudio` | `gradium` | any |
-| `GRADIUM_API_KEY` | with Gradium | your Gradium key | same (Sensitive) | Production, Preview |
-| `GRADIUM_VOICE_ID` | with Gradium | cloned voice uid | Production: clone uid; Preview: a built-in voice uid | per environment |
+| `GRADIUM_API_KEY` | for Gradium voice | your Gradium key | same (Sensitive) | Production, Preview |
+| `GRADIUM_VOICE_ID` | for Gradium voice | cloned voice uid | Production: clone uid; Preview: a built-in voice uid | per environment |
 | `VOICE_TIMEOUT_MS` | no | 40000 | 40000 | any; falls back to `VOICESTUDIO_TIMEOUT_MS` |
 | `VOICESTUDIO_BASE_URL` | VoiceStudio only | `http://127.0.0.1:3900` | gateway URL, `https://<machine>.<tailnet>.ts.net` | Production (Preview optional) |
-| `VOICESTUDIO_VOICE_ID` | VoiceStudio only | `alloy` (built-in) | Production: cloned profile id; Preview: `alloy` | per environment |
+| `VOICESTUDIO_VOICE_ID` | VoiceStudio only | `alloy` (built-in) | Production: cloned voice profile id; Preview: `alloy` | per environment |
 | `VOICESTUDIO_AUTH_TOKEN` | VoiceStudio: required when base URL is not loopback | empty | gateway token (Sensitive) | Production, Preview if it uses the gateway |
-| `JEFFY_PROFILE_JSON` | no | unset (use `profile/profile.private.json`) | minified profile JSON | Production only; never Preview |
-| `JEFFY_TIMEZONE` | no | `America/Denver` | your IANA timezone | any; used to resolve "yesterday" / "today" |
+| `JEFFY_TIMEZONE` | no | `America/Denver` | your IANA timezone | any; used for today's date in the prompt |
 | `VOICESTUDIO_MODEL` | no | unset | unset | sent as `model` only if set |
 | `VOICESTUDIO_RESPONSE_FORMAT` | no | `wav` | `wav` or `mp3` (mp3 needs ffmpeg on the VoiceStudio machine) | any |
 | `VOICESTUDIO_TIMEOUT_MS` | no | 40000 | legacy name of `VOICE_TIMEOUT_MS` | any |
-| `GEMINI_TIMEOUT_MS` | no | 15000 | 15000 | any |
+| `GEMINI_TIMEOUT_MS` | no | 50000 | 50000 | any; covers the whole streamed answer |
 
-`VOICESTUDIO_BASE_URL` must be `https:` unless it is loopback.
+Voice variables are checked only when a request asks for voice. `VOICESTUDIO_BASE_URL` must be `https:` unless it is loopback.
 
 ## Troubleshooting
 
 | Code / message | Cause and fix |
 | --- | --- |
-| `invalid_request` "Type a question first." / "Keep questions under 500 characters." | Empty or too-long question. Shorten it. |
-| `config_missing` "Jeffy isn't fully set up yet. Missing: ..." | Add the named variables (`.env.local` or Vercel), then restart or redeploy. A config line mentioning https means `VOICESTUDIO_BASE_URL` is plain http on a non-loopback host. A missing `VOICESTUDIO_AUTH_TOKEN` is reported the same way. |
+| `invalid_request` "Type a message first." / "Keep messages under 4000 characters." / attachment messages | Empty or too-long message, an unsupported or unreadable attachment, more than 4 files, or more than 3 MB of attachments. |
+| `config_missing` "Jeffy isn't fully set up yet. Missing: GOOGLE_GENERATIVE_AI_API_KEY." | Add the key (`.env.local` or Vercel), then restart or redeploy. |
 | `config_missing` "The Gemini key was rejected." | Check `GOOGLE_GENERATIVE_AI_API_KEY`; create a new key in Google AI Studio. |
 | `rate_limited` | Gemini quota hit. Wait a moment or use a key with a higher tier. |
-| `model_error` "couldn't think of an answer" | Gemini failed or timed out. Retry; raise `GEMINI_TIMEOUT_MS` if it repeats. |
+| `model_error` "couldn't come up with an answer" | Gemini failed or timed out. Retry; raise `GEMINI_TIMEOUT_MS` if it repeats. |
 | `voice_offline` | Gradium unreachable (retry), or VoiceStudio, Caddy or Tailscale is not running, or the computer is asleep. Run `curl http://127.0.0.1:3900/health` on that machine, then [docs/voicestudio.md](docs/voicestudio.md). |
 | `voice_timeout` | Voice generation exceeded `VOICE_TIMEOUT_MS` (first request may be downloading models; warm it up). Vercel functions stop at 60 s. |
 | `voice_busy` | Gradium rate limit (429) or VoiceStudio at capacity. Retry shortly. |
 | `voice_quota` "free voice allowance is used up" | Gradium credits are exhausted. Wait for the monthly reset or upgrade; see [docs/gradium.md](docs/gradium.md). Not retryable. |
 | `voice_auth` "rejected Jeffy's credentials" | `GRADIUM_API_KEY` is wrong or revoked; or, for VoiceStudio, `VOICESTUDIO_AUTH_TOKEN` differs from the gateway's token. Re-run `deploy/gateway/verify-gateway.sh`. |
+| `voice_config` "voice isn't set up. Missing: ..." | Voice was requested but voice variables are missing or invalid (named in the message; a line mentioning https means `VOICESTUDIO_BASE_URL` is plain http on a non-loopback host; `VOICESTUDIO_AUTH_TOKEN` is reported the same way). The text answer still arrives. |
 | `voice_config` "isn't set up correctly" | `GRADIUM_VOICE_ID` is unknown (list with `npm run voices:gradium`); or `VOICESTUDIO_VOICE_ID` is unknown or matches several profiles. List voices (`GET /v1/audio/voices`) and use the 8-char id. |
 | `internal` | Unexpected error. Check server logs for `[jeffy] chat failed` (error codes only). |
 | Reply plays nothing, browser blocked autoplay | Press play; autoplay is best effort. |
