@@ -1,28 +1,37 @@
 "use client"
-// Adapted from prompt-kit (https://github.com/ibelick/prompt-kit, MIT, commit 5a94966): same API shape, without the shadcn/lucide/markdown dependencies.
+// Vendored from prompt-kit (https://github.com/ibelick/prompt-kit, MIT).
 
 import { cn } from "@/lib/utils"
 
 export type TextShimmerProps = {
   as?: string
   duration?: number
+  spread?: number
   children: React.ReactNode
 } & React.HTMLAttributes<HTMLElement>
 
-// Shimmer is a CSS gradient sweep (.jeffy-shimmer in globals.css); no animation library needed.
 export function TextShimmer({
   as = "span",
   className,
-  duration = 2.2,
+  duration = 4,
+  spread = 20,
   children,
-  style,
   ...props
 }: TextShimmerProps) {
+  const dynamicSpread = Math.min(Math.max(spread, 5), 45)
   const Component = as as React.ElementType
+
   return (
     <Component
-      className={cn("jeffy-shimmer font-medium", className)}
-      style={{ animationDuration: `${duration}s`, ...style }}
+      className={cn(
+        "bg-size-[200%_auto] bg-clip-text font-medium text-transparent",
+        "animate-[shimmer_4s_infinite_linear]",
+        className
+      )}
+      style={{
+        backgroundImage: `linear-gradient(to right, var(--muted-foreground) ${50 - dynamicSpread}%, var(--foreground) 50%, var(--muted-foreground) ${50 + dynamicSpread}%)`,
+        animationDuration: `${duration}s`,
+      }}
       {...props}
     >
       {children}

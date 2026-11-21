@@ -5,8 +5,8 @@ import {
   Message,
   MessageAction,
   MessageActions,
-  MessageContent,
 } from "@/components/prompt-kit/message";
+import { Button } from "@/components/ui/button";
 import { TextShimmer } from "@/components/prompt-kit/text-shimmer";
 import { AudioPlayer, LivePlayer } from "./audio-player";
 import { Collapse } from "./collapse";
@@ -85,12 +85,12 @@ export function TurnView({
         </Collapse>
 
         {text && (
-          <MessageContent
+          <div
             aria-live="polite"
             className="text-[16px] leading-relaxed"
           >
             <StreamedText text={text} />
-          </MessageContent>
+          </div>
         )}
 
         {status === "error" && (
@@ -98,7 +98,7 @@ export function TurnView({
             role="alert"
             className="jeffy-enter flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line px-4 py-2"
           >
-            <span className="min-w-0 text-sm text-danger">{turn.error}</span>
+            <span className="min-w-0 text-sm text-danger">{turn.error?.message}</span>
             <button
               type="button"
               onClick={onRegenerate}
@@ -115,7 +115,7 @@ export function TurnView({
             role="status"
             className="jeffy-enter flex min-h-11 items-center gap-2 text-sm text-ink-muted"
           >
-            <span className="jeffy-dot size-1.5 rounded-full bg-accent" />
+            <span className="jeffy-dot size-1.5 rounded-full bg-glow" />
             Generating voice…
           </div>
         )}
@@ -148,18 +148,15 @@ export function TurnView({
 
         {status === "done" && text && (
           <MessageActions className="jeffy-enter -ml-2">
-            <MessageAction
-              label={copied ? "Copied" : "Copy answer"}
-              onClick={copy}
-            >
-              {copied ? <CheckIcon /> : <CopyIcon />}
+            <MessageAction tooltip={copied ? "Copied" : "Copy answer"}>
+              <Button variant="ghost" size="icon" aria-label={copied ? "Copied" : "Copy answer"} onClick={copy}>
+                {copied ? <CheckIcon /> : <CopyIcon />}
+              </Button>
             </MessageAction>
-            <MessageAction
-              label="Regenerate answer"
-              onClick={onRegenerate}
-              disabled={busy}
-            >
-              <RegenerateIcon />
+            <MessageAction tooltip="Regenerate answer">
+              <Button variant="ghost" size="icon" aria-label="Regenerate answer" onClick={onRegenerate} disabled={busy}>
+                <RegenerateIcon />
+              </Button>
             </MessageAction>
           </MessageActions>
         )}

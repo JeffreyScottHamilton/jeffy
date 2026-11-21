@@ -7,7 +7,6 @@ import {
   type ChatMode,
   type ErrorCode,
 } from "@/lib/api-types";
-import { requestAuthorized } from "@/lib/server/auth";
 import { readConfig } from "@/lib/server/config";
 import { JeffyError } from "@/lib/server/errors";
 import { cleanReply, streamReply } from "@/lib/server/gemini";
@@ -35,7 +34,6 @@ const MESSAGES: Record<ErrorCode, string> = {
   voice_auth: "The voice service rejected Jeffy's credentials. Check the voice API key or token.",
   voice_config: "Jeffy's voice isn't set up correctly. Check the voice id (GRADIUM_VOICE_ID or VOICESTUDIO_VOICE_ID).",
   voice_quota: "The free voice allowance is used up for this month.",
-  unauthorized: "Locked. Reload the page and enter the password.",
   internal: "Something went wrong. Try again.",
 };
 
@@ -111,7 +109,6 @@ function failure(e: unknown, fallback: ErrorCode): { code: ErrorCode; message: s
 
 export async function POST(request: Request): Promise<Response> {
   try {
-    if (!(await requestAuthorized(request))) return errorResponse("unauthorized", 401, false);
     let text: string;
     try {
       text = await request.text();
@@ -129,7 +126,7 @@ export async function POST(request: Request): Promise<Response> {
     if (!obj || typeof obj.question !== "string") return invalid();
     const question = obj.question.trim();
     if (!question) return invalid();
-    if (question.length > MAX_QUESTION_CHARS) return invalid("Keep questions under 500 characters.");
+    if (question.length > MAX_QUESTION_CHARS) return invalid(`Keep questions under ${MAX_QUESTION_CHARS} characters.`);
     const history = parseHistory(obj.history);
     if (obj.mode !== undefined && obj.mode !== "text" && obj.mode !== "talk") return invalid();
     const mode: ChatMode = obj.mode === "talk" ? "talk" : "text";

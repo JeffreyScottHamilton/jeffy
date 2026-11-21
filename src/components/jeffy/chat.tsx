@@ -161,7 +161,7 @@ export function Chat() {
         }
         break;
       case "error":
-        patch(id, (t) => ({ ...t, status: "error", error: ev.message }));
+        patch(id, (t) => ({ ...t, status: "error", error: { message: ev.message, retryable: ev.retryable } }));
         break;
     }
   };
@@ -239,7 +239,7 @@ export function Chat() {
             ? { ...t, voice: t.voice.status === "pending" ? { status: "none" } : t.voice }
             : t.text
               ? { ...t, status: "done", voice: { status: "none" } }
-              : { ...t, status: "error", error: "Stopped before Jeffy answered." },
+              : { ...t, status: "error", error: { message: "Stopped before Jeffy answered.", retryable: true } },
         );
       } else {
         apply(id, { type: "error", code: "internal", message: NETWORK_MSG, retryable: true });
@@ -342,7 +342,7 @@ export function Chat() {
           value={draft}
           onValueChange={setDraft}
           onSubmit={send}
-          className="flex items-end gap-1 rounded-3xl border-line bg-raised p-1.5 pl-3 shadow-none transition-colors has-[:focus-visible]:border-accent/60"
+          className="flex items-end gap-1 rounded-3xl border-line bg-raised p-1.5 pl-3 shadow-none transition-colors has-[:focus-visible]:border-glow/60"
         >
           <PromptInputTextarea
             placeholder="Ask Jeffy something…"

@@ -1,32 +1,42 @@
 "use client"
-// Adapted from prompt-kit (https://github.com/ibelick/prompt-kit, MIT, commit 5a94966): same API shape, without the shadcn/lucide/markdown dependencies.
+// Vendored from prompt-kit (https://github.com/ibelick/prompt-kit, MIT).
 
-import { ArrowDownIcon } from "@/components/jeffy/icons"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { type VariantProps } from "class-variance-authority"
+import { ChevronDown } from "lucide-react"
 import { useStickToBottomContext } from "use-stick-to-bottom"
 
-export type ScrollButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement>
+export type ScrollButtonProps = {
+  className?: string
+  variant?: VariantProps<typeof buttonVariants>["variant"]
+  size?: VariantProps<typeof buttonVariants>["size"]
+} & React.ButtonHTMLAttributes<HTMLButtonElement>
 
-function ScrollButton({ className, ...props }: ScrollButtonProps) {
+function ScrollButton({
+  className,
+  variant = "outline",
+  size = "sm",
+  ...props
+}: ScrollButtonProps) {
   const { isAtBottom, scrollToBottom } = useStickToBottomContext()
 
   return (
-    <button
-      type="button"
-      aria-label="Scroll to latest message"
-      tabIndex={isAtBottom ? -1 : 0}
+    <Button
+      variant={variant}
+      size={size}
       className={cn(
-        "inline-flex size-10 items-center justify-center rounded-full border border-line bg-raised text-ink transition-[transform,opacity] duration-200 ease-out hover:bg-surface active:scale-95",
+        "h-10 w-10 rounded-full transition-all duration-150 ease-out",
         !isAtBottom
           ? "translate-y-0 scale-100 opacity-100"
-          : "pointer-events-none translate-y-3 scale-95 opacity-0",
+          : "pointer-events-none translate-y-4 scale-95 opacity-0",
         className
       )}
       onClick={() => scrollToBottom()}
       {...props}
     >
-      <ArrowDownIcon />
-    </button>
+      <ChevronDown className="h-5 w-5" />
+    </Button>
   )
 }
 

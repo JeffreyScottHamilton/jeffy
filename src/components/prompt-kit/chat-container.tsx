@@ -1,5 +1,5 @@
 "use client"
-// Vendored from prompt-kit (https://github.com/ibelick/prompt-kit, MIT, commit 5a94966).
+// Vendored from prompt-kit (https://github.com/ibelick/prompt-kit, MIT).
 
 import { cn } from "@/lib/utils"
 import { StickToBottom } from "use-stick-to-bottom"
@@ -26,7 +26,7 @@ function ChatContainerRoot({
 }: ChatContainerRootProps) {
   return (
     <StickToBottom
-      className={cn("flex overflow-hidden", className)}
+      className={cn("flex overflow-y-auto", className)}
       resize="smooth"
       initial="instant"
       role="log"

@@ -69,7 +69,6 @@ All are server-only. Set them in `.env.local` locally and in Vercel Project Sett
 | `VOICESTUDIO_VOICE_ID` | VoiceStudio only | `alloy` (built-in) | Production: cloned profile id; Preview: `alloy` | per environment |
 | `VOICESTUDIO_AUTH_TOKEN` | VoiceStudio: required when base URL is not loopback | empty | gateway token (Sensitive) | Production, Preview if it uses the gateway |
 | `JEFFY_PROFILE_JSON` | no | unset (use `profile/profile.private.json`) | minified profile JSON | Production only; never Preview |
-| `JEFFY_PASSWORD` | no | unset (no gate) | a strong random password (Sensitive) | Production only; unset = open. Changing it signs everyone out |
 | `JEFFY_TIMEZONE` | no | `America/Denver` | your IANA timezone | any; used to resolve "yesterday" / "today" |
 | `VOICESTUDIO_MODEL` | no | unset | unset | sent as `model` only if set |
 | `VOICESTUDIO_RESPONSE_FORMAT` | no | `wav` | `wav` or `mp3` (mp3 needs ffmpeg on the VoiceStudio machine) | any |

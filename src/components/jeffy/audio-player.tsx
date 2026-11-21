@@ -107,11 +107,11 @@ export function AudioPlayer({
         {playing ? <PauseIcon /> : <PlayIcon />}
       </button>
       <div className="min-w-0 flex-1">
-        <div className="relative flex h-6 items-center has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent">
+        <div className="relative flex h-6 items-center has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-glow">
           <div className="h-[3px] w-full overflow-hidden rounded-full bg-track">
             <div
               ref={fillRef}
-              className="h-full origin-left rounded-full bg-accent"
+              className="h-full origin-left rounded-full bg-glow"
               style={{ transform: "scaleX(0)" }}
             />
           </div>
@@ -193,7 +193,7 @@ export function LivePlayer({ engine }: { engine: VoiceEngine }) {
           <div className="h-[3px] w-full overflow-hidden rounded-full bg-track">
             <div
               ref={fillRef}
-              className="h-full origin-left rounded-full bg-accent"
+              className="h-full origin-left rounded-full bg-glow"
               style={{ transform: "scaleX(0)" }}
             />
           </div>

@@ -7,7 +7,6 @@ vi.mock("@/lib/server/gemini", async () => {
 vi.mock("@/lib/server/voicestudio", () => ({ synthesize: vi.fn() }));
 vi.mock("@/lib/server/gradium", () => ({ synthesizeGradium: vi.fn(), streamGradium: vi.fn() }));
 
-import { authToken } from "@/lib/server/auth";
 import { RateLimitError, VoiceOfflineError, VoiceTimeoutError } from "@/lib/server/errors";
 import { streamReply, type ReplyChunk } from "@/lib/server/gemini";
 import { streamGradium } from "@/lib/server/gradium";
@@ -49,28 +48,6 @@ const events = async (r: Response) =>
 
 const logged = () => JSON.stringify(errSpy.mock.calls);
 
-describe("POST /api/chat password gate", () => {
-  it("401 without a valid cookie when JEFFY_PASSWORD is set", async () => {
-    vi.stubEnv("JEFFY_PASSWORD", "fake-test-password");
-    const r = await post({ question: QUESTION });
-    expect(r.status).toBe(401);
-    expect((await r.json()).error.code).toBe("unauthorized");
-    expect(streamReply).not.toHaveBeenCalled();
-  });
-  it("passes with the valid cookie", async () => {
-    vi.stubEnv("JEFFY_PASSWORD", "fake-test-password");
-    const token = await authToken("fake-test-password");
-    const r = await POST(
-      new Request("http://localhost/api/chat", {
-        method: "POST",
-        headers: { cookie: `jeffy_auth=${token}` },
-        body: JSON.stringify({ question: QUESTION }),
-      }),
-    );
-    expect(r.status).toBe(200);
-  });
-});
-
 describe("POST /api/chat", () => {
   it("400 on empty / whitespace / non-string / bad JSON", async () => {
     for (const b of [{ question: "   " }, { question: 3 }, "not json", {}]) {
@@ -80,9 +57,9 @@ describe("POST /api/chat", () => {
     }
   });
   it("400 on too-long question and oversized body", async () => {
-    const r = await post({ question: "a".repeat(501) });
+    const r = await post({ question: "a".repeat(4001) });
     expect(r.status).toBe(400);
-    expect((await r.json()).error.message).toBe("Keep questions under 500 characters.");
+    expect((await r.json()).error.message).toBe("Keep questions under 4000 characters.");
     expect((await post({ question: "hi", history: "x".repeat(17000) })).status).toBe(400);
   });
   it("503 config_missing lists names but no secret values", async () => {

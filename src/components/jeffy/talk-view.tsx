@@ -257,7 +257,7 @@ export function TalkView({
 
   // A finished turn hands the floor back to the listener; its failure, if any, is shown as a notice.
   const shown = active;
-  const turnNotice = finished ? (active?.status === "error" ? active.error : active?.voice.status === "error" ? active.voice.message : null) : null;
+  const turnNotice = finished ? (active?.status === "error" ? active.error?.message : active?.voice.status === "error" ? active.voice.message : null) : null;
   const notice = turnNotice ?? netNotice;
   const problem =
     !Recognition
