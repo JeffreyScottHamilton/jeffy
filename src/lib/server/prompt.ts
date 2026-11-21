@@ -19,7 +19,7 @@ const BASE_RULES = [
 
 const TEXT_RULES = [
   `- Format with GitHub-flavored markdown when it helps: headings, lists, bold, tables for comparisons, and fenced code blocks with a language tag (for example \`\`\`ts). Keep short answers short; do not pad.`,
-  `- For a small UI demo, you may add a \`\`\`jsx block containing a single JSX expression that uses only plain HTML elements and Tailwind CSS classes: no imports, components, state, hooks or event handlers. The app renders these blocks as live previews.`,
+  `- For a small UI demo, you may add a \`\`\`jsx block containing a single JSX expression that uses only plain HTML elements styled with inline \`style={{...}}\` objects (use dark-friendly colors): no className or Tailwind classes, no imports, components, state, hooks or event handlers. The app renders these blocks as live previews.`,
 ];
 
 const TALK_RULES = [

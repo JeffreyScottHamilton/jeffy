@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { PauseIcon, PlayIcon, ReplayIcon, StopIcon } from "./icons";
+import { Pause, Play, RotateCcw, Square } from "lucide-react";
 import type { VoiceEngine } from "./voice-engine";
 
 function fmt(t: number) {
@@ -11,7 +11,7 @@ function fmt(t: number) {
 }
 
 const roundBtn =
-  "inline-flex size-11 shrink-0 items-center justify-center rounded-full transition-[background-color,transform] duration-150 ease-out active:scale-95";
+  "inline-flex size-10 shrink-0 items-center justify-center rounded-full transition-[background-color,transform] duration-150 ease-out active:scale-95";
 
 export function AudioPlayer({
   url,
@@ -77,7 +77,7 @@ export function AudioPlayer({
   };
 
   return (
-    <div className="jeffy-enter flex w-full max-w-sm items-center gap-2 rounded-2xl border border-line bg-raised p-2">
+    <div className="jeffy-enter flex w-full max-w-sm items-center gap-2 rounded-2xl border bg-card/80 p-2 shadow-sm">
       <audio
         ref={audioRef}
         src={url}
@@ -102,16 +102,16 @@ export function AudioPlayer({
         type="button"
         onClick={toggle}
         aria-label={playing ? "Pause reply" : "Play reply"}
-        className={`${roundBtn} ${blocked ? "jeffy-dot " : ""}bg-cobalt text-white hover:bg-cobalt-press`}
+        className={`${roundBtn} ${blocked ? "jeffy-dot " : ""}bg-primary text-primary-foreground hover:bg-primary/90`}
       >
-        {playing ? <PauseIcon /> : <PlayIcon />}
+        {playing ? <Pause className="size-4.5" fill="currentColor" /> : <Play className="size-4.5 translate-x-px" fill="currentColor" />}
       </button>
       <div className="min-w-0 flex-1">
-        <div className="relative flex h-6 items-center has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-glow">
-          <div className="h-[3px] w-full overflow-hidden rounded-full bg-track">
+        <div className="relative flex h-6 items-center has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring">
+          <div className="h-[3px] w-full overflow-hidden rounded-full bg-muted">
             <div
               ref={fillRef}
-              className="h-full origin-left rounded-full bg-glow"
+              className="h-full origin-left rounded-full bg-primary"
               style={{ transform: "scaleX(0)" }}
             />
           </div>
@@ -133,7 +133,7 @@ export function AudioPlayer({
             className="absolute inset-x-0 -inset-y-2.5 h-11 w-full cursor-pointer opacity-0 focus-visible:outline-none"
           />
         </div>
-        <div className="mt-0.5 flex items-center justify-between gap-3 text-xs text-ink-muted">
+        <div className="mt-0.5 flex items-center justify-between gap-3 text-xs text-muted-foreground">
           <span className="tabular-nums">
             {blocked ? "Tap to play" : `${fmt(time)} / ${fmt(duration)}`}
           </span>
@@ -143,9 +143,9 @@ export function AudioPlayer({
         type="button"
         onClick={replay}
         aria-label="Replay from start"
-        className={`${roundBtn} text-ink hover:bg-surface`}
+        className={`${roundBtn} text-foreground hover:bg-accent`}
       >
-        <ReplayIcon />
+        <RotateCcw className="size-4.5" />
       </button>
     </div>
   );
@@ -179,26 +179,26 @@ export function LivePlayer({ engine }: { engine: VoiceEngine }) {
   useEffect(() => engine.subscribe(() => setPaused(engine.paused)), [engine]);
 
   return (
-    <div className="jeffy-enter flex w-full max-w-sm items-center gap-2 rounded-2xl border border-line bg-raised p-2">
+    <div className="jeffy-enter flex w-full max-w-sm items-center gap-2 rounded-2xl border bg-card/80 p-2 shadow-sm">
       <button
         type="button"
         onClick={() => (paused ? engine.resume() : engine.pause())}
         aria-label={paused ? "Resume reply" : "Pause reply"}
-        className={`${roundBtn} bg-cobalt text-white hover:bg-cobalt-press`}
+        className={`${roundBtn} bg-primary text-primary-foreground hover:bg-primary/90`}
       >
-        {paused ? <PlayIcon /> : <PauseIcon />}
+        {paused ? <Play className="size-4.5 translate-x-px" fill="currentColor" /> : <Pause className="size-4.5" fill="currentColor" />}
       </button>
       <div className="min-w-0 flex-1">
         <div className="flex h-6 items-center">
-          <div className="h-[3px] w-full overflow-hidden rounded-full bg-track">
+          <div className="h-[3px] w-full overflow-hidden rounded-full bg-muted">
             <div
               ref={fillRef}
-              className="h-full origin-left rounded-full bg-glow"
+              className="h-full origin-left rounded-full bg-primary"
               style={{ transform: "scaleX(0)" }}
             />
           </div>
         </div>
-        <div className="mt-0.5 text-xs text-ink-muted">
+        <div className="mt-0.5 text-xs text-muted-foreground">
           <span ref={timeRef} className="tabular-nums">
             0:00
           </span>
@@ -208,9 +208,9 @@ export function LivePlayer({ engine }: { engine: VoiceEngine }) {
         type="button"
         onClick={() => engine.stop()}
         aria-label="Stop reply"
-        className={`${roundBtn} text-ink hover:bg-surface`}
+        className={`${roundBtn} text-foreground hover:bg-accent`}
       >
-        <StopIcon />
+        <Square className="size-4" fill="currentColor" />
       </button>
     </div>
   );

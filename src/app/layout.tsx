@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,7 +15,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Jeffy",
-  description: "Ask by typing. Jeffy thinks it through, writes the answer and says it out loud.",
+  description:
+    "Jeffy is a friendly, sharp AI assistant: it reasons through your question, searches the web when you ask, reads your files and can say the answer out loud.",
 };
 
 export const viewport: Viewport = {
@@ -29,9 +31,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} dark h-full bg-paper antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} dark h-full bg-background antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <TooltipProvider delayDuration={200}>{children}</TooltipProvider>
+      </body>
     </html>
   );
 }

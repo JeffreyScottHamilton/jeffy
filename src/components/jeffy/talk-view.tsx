@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { MAX_QUESTION_CHARS } from "@/lib/api-types";
-import { CloseIcon, MicIcon, MicOffIcon } from "./icons";
+import { Mic, MicOff, X } from "lucide-react";
 import type { Turn } from "./types";
 import type { VoiceEngine } from "./voice-engine";
 
@@ -326,7 +326,7 @@ export function TalkView({
             onClick={() => setMuted((m) => !m)}
             className={`${roundBtn} ${muted ? "bg-ink text-paper" : "bg-surface text-ink hover:bg-track"}`}
           >
-            {muted ? <MicOffIcon /> : <MicIcon />}
+            {muted ? <MicOff className="size-5" /> : <Mic className="size-5" />}
           </button>
         )}
         <button
@@ -336,7 +336,7 @@ export function TalkView({
           onClick={() => cb.current.onClose()}
           className={`${roundBtn} bg-cobalt text-white hover:bg-cobalt-press`}
         >
-          <CloseIcon />
+          <X className="size-5" />
         </button>
       </div>
     </div>

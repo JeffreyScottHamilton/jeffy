@@ -1,40 +1,39 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { AudioLines, ImageUp, Volume2, VolumeX } from "lucide-react";
 import {
   ChatContainerContent,
   ChatContainerRoot,
   ChatContainerScrollAnchor,
 } from "@/components/prompt-kit/chat-container";
-import {
-  PromptInput,
-  PromptInputActions,
-  PromptInputTextarea,
-} from "@/components/prompt-kit/prompt-input";
-import { PromptSuggestion } from "@/components/prompt-kit/prompt-suggestion";
+import { FileUpload, FileUploadContent } from "@/components/prompt-kit/file-upload";
 import { ScrollButton } from "@/components/prompt-kit/scroll-button";
+import { Button } from "@/components/ui/button";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
+  MAX_ATTACHMENTS,
   MAX_HISTORY_TURNS,
-  MAX_QUESTION_CHARS,
+  type Attachment,
   type ChatErrorBody,
   type ChatEvent,
   type ChatMode,
   type ChatRequest,
 } from "@/lib/api-types";
-import { SendIcon, StopIcon, WaveformIcon } from "./icons";
+import { cn } from "@/lib/utils";
+import { ACCEPT, fitFiles, isImage, readAsDataUrl, type PendingFile } from "./attachments";
+import { ChatSidebar } from "./chat-sidebar";
+import { Composer } from "./composer";
+import { Greeting, Suggestions } from "./empty-state";
+import { GENERIC_MSG, NO_VOICE_MSG, applyEvent, createNdjsonParser, endOfStream, stopTurn } from "./events";
+import { loadConversations, loadVoicePref, saveConversations, saveVoicePref, titleFrom } from "./storage";
 import { TalkView } from "./talk-view";
 import { TurnView } from "./turn-view";
-import { newTurn, type Turn } from "./types";
+import { newTurn, type Conversation, type Turn } from "./types";
 import { VoiceEngine } from "./voice-engine";
 
 const NETWORK_MSG = "Couldn't reach Jeffy. Check your connection and try again.";
-const GENERIC_MSG = "Something went wrong. Try again.";
-const NO_VOICE_MSG = "The voice didn't arrive. Try again.";
-const SUGGESTIONS = [
-  "What have you been working on lately?",
-  "How was Sadie's?",
-  "What happened yesterday?",
-];
 
 function b64ToBytes(data: string): Uint8Array<ArrayBuffer> {
   const bin = atob(data);
@@ -43,24 +42,66 @@ function b64ToBytes(data: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
+function greetingFor(d: Date): string {
+  const h = d.getHours();
+  const part = h < 5 ? "Up late" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+  return `${part}. What's on your mind?`;
+}
+
+const noopSubscribe = () => () => {};
+
+/** Renders the chat only on the client, so the first client render can read localStorage without a mismatch. */
 export function Chat() {
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const client = useSyncExternalStore(noopSubscribe, () => true, () => false);
+  if (!client) return <div className="bg-background h-dvh w-full" aria-busy="true" />;
+  return <ChatApp />;
+}
+
+type RunOpts = { mode: ChatMode; voice: boolean; search: boolean; think: boolean; attachments: Attachment[] };
+
+function ChatApp() {
+  const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations());
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const [running, setRunning] = useState(false);
+  const [files, setFiles] = useState<PendingFile[]>([]);
+  const [warning, setWarning] = useState<string | null>(null);
+  const [search, setSearch] = useState(false);
+  const [think, setThink] = useState(true);
+  const [voice, setVoice] = useState(() => loadVoicePref());
+  const [category, setCategory] = useState<string | null>(null);
+  const [running, setRunning] = useState<{ convId: string; turnId: string; search: boolean } | null>(null);
   const [talkOpen, setTalkOpen] = useState(false);
+  const [greeting] = useState(() => greetingFor(new Date()));
   const [engine] = useState(() => new VoiceEngine());
-  const talkButton = useRef<HTMLButtonElement>(null);
+
   const runningRef = useRef(false);
+  const abort = useRef<AbortController | null>(null);
   /** Per-turn voice errors held until the audio that already arrived has played. */
   const voiceErrors = useRef(new Map<string, string>());
   /** Turns whose live voice was stopped by the user: later chunks are dropped. */
   const silenced = useRef(new Set<string>());
   const current = useRef<HTMLAudioElement | null>(null);
   const urls = useRef(new Map<string, string>());
-  const abort = useRef<AbortController | null>(null);
+  /** Attachment payloads kept in memory so Retry can resend them (never persisted). */
+  const payloads = useRef(new Map<string, Attachment[]>());
+  const composerRef = useRef<HTMLDivElement>(null);
+  const talkButton = useRef<HTMLButtonElement>(null);
+  const latest = useRef(conversations);
 
-  const trimmed = draft.trim();
-  const canSend = trimmed.length > 0 && !running;
+  const active = conversations.find((c) => c.id === activeId) ?? null;
+  const turns = active?.turns ?? [];
+
+  // Persist (debounced while streaming) and flush when the page is hidden.
+  useEffect(() => {
+    latest.current = conversations;
+    const t = setTimeout(() => saveConversations(conversations), 400);
+    return () => clearTimeout(t);
+  }, [conversations]);
+  useEffect(() => {
+    const flush = () => saveConversations(latest.current);
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, []);
 
   // Abort any open stream and release audio on unmount.
   useEffect(() => {
@@ -74,8 +115,18 @@ export function Chat() {
     };
   }, [engine]);
 
-  const patch = (id: string, fn: (t: Turn) => Turn) =>
-    setTurns((ts) => ts.map((t) => (t.id === id ? fn(t) : t)));
+  const focusComposer = () =>
+    requestAnimationFrame(() => {
+      const el = composerRef.current?.querySelector("textarea");
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+
+  const patch = (convId: string, turnId: string, fn: (t: Turn) => Turn) =>
+    setConversations((cs) =>
+      cs.map((c) => (c.id === convId ? { ...c, turns: c.turns.map((t) => (t.id === turnId ? fn(t) : t)) } : c)),
+    );
 
   const revoke = (id: string) => {
     const old = urls.current.get(id);
@@ -85,12 +136,12 @@ export function Chat() {
     }
   };
 
-  const startLive = (id: string) => {
+  const startLive = (convId: string, id: string) => {
     engine.begin(id, (r) => {
       const err = voiceErrors.current.get(id);
       voiceErrors.current.delete(id);
       if (err) {
-        patch(id, (t) => (t.voice.status === "live" ? { ...t, voice: { status: "error", message: err } } : t));
+        patch(convId, id, (t) => (t.voice.status === "live" ? { ...t, voice: { status: "error", message: err } } : t));
         return;
       }
       if (!r.complete) silenced.current.add(id);
@@ -98,87 +149,81 @@ export function Chat() {
         revoke(id);
         const url = URL.createObjectURL(r.wav);
         urls.current.set(id, url);
-        patch(id, (t) =>
+        patch(convId, id, (t) =>
           t.voice.status === "live" ? { ...t, voice: { status: "ready", url, autoplay: false } } : t,
         );
       } else {
-        patch(id, (t) => (t.voice.status === "live" ? { ...t, voice: { status: "none" } } : t));
+        patch(convId, id, (t) => (t.voice.status === "live" ? { ...t, voice: { status: "none" } } : t));
       }
     });
-    patch(id, (t) => ({ ...t, voice: { status: "live" } }));
   };
 
-  const apply = (id: string, ev: ChatEvent, mode: ChatMode = "text") => {
-    switch (ev.type) {
-      case "text":
-        patch(id, (t) => ({ ...t, text: t.text + ev.delta }));
-        break;
-      case "text_done":
-        patch(id, (t) => ({
-          ...t,
-          status: "done",
-          text: ev.text,
-          final: ev.text,
-          voice: t.voice.status === "none" ? { status: "pending" } : t.voice,
-        }));
-        break;
-      case "audio_chunk":
-        if (silenced.current.has(id)) break;
-        if (engine.turnId !== id) startLive(id);
-        engine.push(b64ToBytes(ev.data), ev.sampleRate);
-        break;
-      case "audio_end":
-        if (engine.turnId === id) engine.end();
-        break;
-      case "audio": {
-        if (silenced.current.has(id)) break;
-        revoke(id);
-        let bytes: Uint8Array<ArrayBuffer>;
-        try {
-          bytes = b64ToBytes(ev.data);
-        } catch {
-          patch(id, (t) => ({ ...t, voice: { status: "error", message: NO_VOICE_MSG } }));
-          break;
-        }
-        const url = URL.createObjectURL(new Blob([bytes], { type: ev.mime }));
-        urls.current.set(id, url);
-        if (mode === "talk") {
-          // Talk mode speaks through the engine so the orb can follow the output level.
-          patch(id, (t) => ({ ...t, voice: { status: "ready", url, autoplay: false } }));
-          void engine.playEncoded(id, bytes.slice().buffer, () => {});
-        } else {
-          patch(id, (t) => ({ ...t, voice: { status: "ready", url, autoplay: true } }));
-        }
-        break;
-      }
-      case "audio_error":
-        if (silenced.current.has(id)) break;
-        if (engine.turnId === id) {
-          voiceErrors.current.set(id, ev.message);
-          engine.end();
-        } else {
-          patch(id, (t) => ({ ...t, voice: { status: "error", message: ev.message } }));
-        }
-        break;
-      case "error":
-        patch(id, (t) => ({ ...t, status: "error", error: { message: ev.message, retryable: ev.retryable } }));
-        break;
-    }
-  };
-
-  const run = async (id: string, question: string, before: Turn[], mode: ChatMode) => {
+  const run = async (convId: string, id: string, question: string, before: Turn[], opts: RunOpts) => {
     const history = before
-      .filter((t) => t.final)
+      .filter((t) => t.status === "done" && t.final)
       .slice(-MAX_HISTORY_TURNS)
       .map((t) => ({ question: t.question, reply: t.final as string }));
-    const body: ChatRequest = { question, history, mode };
+    const body: ChatRequest = {
+      question,
+      history,
+      mode: opts.mode,
+      voice: opts.voice,
+      search: opts.search,
+      think: opts.think,
+      ...(opts.attachments.length ? { attachments: opts.attachments } : {}),
+    };
     const ctrl = new AbortController();
     abort.current = ctrl;
     runningRef.current = true;
-    setRunning(true);
-    let sawError = false;
-    let gotText = false;
-    let gotAudio = false;
+    setRunning({ convId, turnId: id, search: opts.search });
+    let reasoningStartedAt: number | undefined;
+
+    const handle = (ev: ChatEvent) => {
+      const now = Date.now();
+      if (ev.type === "reasoning" && reasoningStartedAt === undefined) reasoningStartedAt = now;
+      switch (ev.type) {
+        case "audio_chunk":
+          if (silenced.current.has(id)) return;
+          if (engine.turnId !== id) startLive(convId, id);
+          engine.push(b64ToBytes(ev.data), ev.sampleRate);
+          break;
+        case "audio_end":
+          if (engine.turnId === id) engine.end();
+          return;
+        case "audio": {
+          if (silenced.current.has(id)) return;
+          revoke(id);
+          let bytes: Uint8Array<ArrayBuffer>;
+          try {
+            bytes = b64ToBytes(ev.data);
+          } catch {
+            patch(convId, id, (t) => ({ ...t, voice: { status: "error", message: NO_VOICE_MSG } }));
+            return;
+          }
+          const url = URL.createObjectURL(new Blob([bytes], { type: ev.mime }));
+          urls.current.set(id, url);
+          if (opts.mode === "talk") {
+            // Talk mode speaks through the engine so the orb can follow the output level.
+            patch(convId, id, (t) => ({ ...t, voice: { status: "ready", url, autoplay: false } }));
+            void engine.playEncoded(id, bytes.slice().buffer, () => {});
+          } else {
+            patch(convId, id, (t) => ({ ...t, voice: { status: "ready", url, autoplay: true } }));
+          }
+          return;
+        }
+        case "audio_error":
+          if (silenced.current.has(id)) return;
+          if (engine.turnId === id) {
+            voiceErrors.current.set(id, ev.message);
+            engine.end();
+            return;
+          }
+          break;
+      }
+      const ctx = { now, reasoningStartedAt, voice: opts.voice };
+      patch(convId, id, (t) => applyEvent(t, ev, ctx));
+    };
+
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -188,100 +233,162 @@ export function Chat() {
       });
       if (!res.ok || !res.body) {
         let message = GENERIC_MSG;
+        let retryable = true;
         try {
           const data = (await res.json()) as ChatErrorBody;
           if (typeof data?.error?.message === "string") message = data.error.message;
+          if (typeof data?.error?.retryable === "boolean") retryable = data.error.retryable;
         } catch {
           /* keep generic */
         }
-        apply(id, { type: "error", code: "internal", message, retryable: true });
+        handle({ type: "error", code: "internal", message, retryable });
         return;
       }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let buf = "";
-      const handle = (raw: string) => {
-        if (!raw.trim()) return;
-        let ev: ChatEvent;
-        try {
-          ev = JSON.parse(raw) as ChatEvent;
-        } catch {
-          return;
-        }
-        if (ev.type === "error") sawError = true;
-        if (ev.type === "text_done") gotText = true;
-        if (ev.type === "audio" || ev.type === "audio_error" || ev.type === "audio_chunk") gotAudio = true;
-        apply(id, ev, mode);
-      };
+      const parser = createNdjsonParser(handle);
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf("\n")) >= 0) {
-          handle(buf.slice(0, nl));
-          buf = buf.slice(nl + 1);
-        }
+        parser.push(decoder.decode(value, { stream: true }));
       }
-      handle(buf + decoder.decode());
+      parser.push(decoder.decode());
+      parser.flush();
       if (engine.turnId === id) engine.end(); // stream closed without audio_end: play out what arrived
-      if (!sawError && !gotText) {
-        apply(id, { type: "error", code: "internal", message: GENERIC_MSG, retryable: true });
-      } else if (gotText && !gotAudio) {
-        apply(id, { type: "audio_error", code: "internal", message: NO_VOICE_MSG, retryable: true });
-      }
+      patch(convId, id, (t) => endOfStream(t, opts.voice));
     } catch (e) {
       if ((e as { name?: string })?.name === "AbortError") {
-        // Stopped by the user: keep whatever text arrived.
         if (engine.turnId === id) engine.stop();
-        patch(id, (t) =>
-          t.final
-            ? { ...t, voice: t.voice.status === "pending" ? { status: "none" } : t.voice }
-            : t.text
-              ? { ...t, status: "done", voice: { status: "none" } }
-              : { ...t, status: "error", error: { message: "Stopped before Jeffy answered.", retryable: true } },
-        );
+        patch(convId, id, stopTurn);
       } else {
-        apply(id, { type: "error", code: "internal", message: NETWORK_MSG, retryable: true });
+        handle({ type: "error", code: "internal", message: NETWORK_MSG, retryable: true });
       }
     } finally {
       if (abort.current === ctrl) {
         abort.current = null;
         runningRef.current = false;
-        setRunning(false);
+        setRunning(null);
       }
     }
   };
 
   const ask = (
     question: string,
-    { replaceId, mode = "text" }: { replaceId?: string; mode?: ChatMode } = {},
+    {
+      replaceId,
+      mode = "text",
+      attachments = [],
+      meta = [],
+    }: { replaceId?: string; mode?: ChatMode; attachments?: Attachment[]; meta?: Turn["attachments"] } = {},
   ): string | null => {
     if (runningRef.current) return null;
     // Runs inside the click/submit gesture, which is what lets the AudioContext start.
     engine.unlock();
     engine.stop();
     current.current?.pause();
+    const now = Date.now();
+    const convId = active?.id ?? crypto.randomUUID();
     const index = replaceId ? turns.findIndex((t) => t.id === replaceId) : turns.length;
     const before = turns.slice(0, Math.max(index, 0));
     const id = replaceId ?? crypto.randomUUID();
+    const old = replaceId ? turns.find((t) => t.id === replaceId) : undefined;
+    const payload = replaceId ? (payloads.current.get(id) ?? []) : attachments;
+    if (!replaceId && attachments.length) payloads.current.set(id, attachments);
     silenced.current.delete(id);
     voiceErrors.current.delete(id);
-    if (replaceId) {
-      revoke(id);
-      setTurns((ts) => ts.map((t) => (t.id === id ? newTurn(id, question) : t)));
-    } else {
-      setTurns((ts) => [...ts, newTurn(id, question)]);
-    }
+    revoke(id);
+    const fresh = newTurn(id, question, old?.attachments ?? meta);
+    setConversations((cs) => {
+      const existing = cs.find((c) => c.id === convId);
+      if (!existing) {
+        return [{ id: convId, title: titleFrom(question), createdAt: now, updatedAt: now, turns: [fresh] }, ...cs];
+      }
+      return cs.map((c) =>
+        c.id !== convId
+          ? c
+          : {
+              ...c,
+              updatedAt: now,
+              turns: replaceId ? c.turns.map((t) => (t.id === id ? fresh : t)) : [...c.turns, fresh],
+            },
+      );
+    });
+    setActiveId(convId);
     runningRef.current = true;
-    void run(id, question, before, mode);
+    const talk = mode === "talk";
+    void run(convId, id, question, before, {
+      mode,
+      voice: talk || voice,
+      search: talk ? false : search,
+      think: talk ? false : think,
+      attachments: payload,
+    });
     return id;
   };
 
   const send = () => {
-    if (!canSend) return;
-    setDraft("");
-    ask(trimmed);
+    const q = draft.trim();
+    if (!q || runningRef.current) return;
+    const atts = files.map(({ name, mime, data }) => ({ name, mime, data }));
+    const meta = files.map(({ name, mime, previewUrl }) => (previewUrl ? { name, mime, previewUrl } : { name, mime }));
+    if (ask(q, { attachments: atts, meta })) {
+      setDraft("");
+      setFiles([]);
+      setWarning(null);
+      setCategory(null);
+    }
+  };
+
+  const stop = () => {
+    abort.current?.abort();
+    engine.stop();
+  };
+
+  const addFiles = async (picked: File[]) => {
+    const { accepted, warning: warn } = fitFiles(files, picked);
+    setWarning(warn);
+    const read = await Promise.all(
+      accepted.map(async ({ file, mime }): Promise<PendingFile | null> => {
+        try {
+          const url = await readAsDataUrl(file);
+          const data = url.slice(url.indexOf(",") + 1);
+          return {
+            id: crypto.randomUUID(),
+            name: file.name,
+            mime,
+            data,
+            size: file.size,
+            ...(isImage(mime) ? { previewUrl: url } : {}),
+          };
+        } catch {
+          return null;
+        }
+      }),
+    );
+    const ok = read.filter((f): f is PendingFile => f !== null);
+    if (ok.length) setFiles((prev) => [...prev, ...ok].slice(0, MAX_ATTACHMENTS));
+    if (ok.length < accepted.length) setWarning("Some files couldn't be read.");
+  };
+
+  const toggleVoice = (on: boolean) => {
+    setVoice(on);
+    saveVoicePref(on);
+    if (!on) {
+      engine.stop();
+      current.current?.pause();
+    }
+  };
+
+  const newChat = () => {
+    setActiveId(null);
+    setCategory(null);
+    focusComposer();
+  };
+
+  const deleteChat = (id: string) => {
+    if (running?.convId === id) stop();
+    setConversations((cs) => cs.filter((c) => c.id !== id));
+    if (activeId === id) setActiveId(null);
   };
 
   const onPlaying = (el: HTMLAudioElement) => {
@@ -290,132 +397,174 @@ export function Chat() {
     current.current = el;
   };
 
-  const near = draft.length >= MAX_QUESTION_CHARS - 100;
+  const composer = (
+    <Composer
+      rootRef={composerRef}
+      value={draft}
+      onValueChange={setDraft}
+      onSubmit={send}
+      onStop={stop}
+      running={!!running}
+      files={files}
+      onRemoveFile={(fid) => setFiles((fs) => fs.filter((f) => f.id !== fid))}
+      warning={warning}
+      onDismissWarning={() => setWarning(null)}
+      search={search}
+      onSearchChange={setSearch}
+      think={think}
+      onThinkChange={setThink}
+      voice={voice}
+      onVoiceChange={toggleVoice}
+    />
+  );
+
+  const empty = turns.length === 0;
 
   return (
-    <>
-      <ChatContainerRoot className="relative min-h-0 flex-1">
-        <ChatContainerContent className="gap-8 px-5 py-4">
-          {turns.length === 0 && (
-            <div className="jeffy-enter mt-[12dvh] flex flex-col items-center gap-6 text-center">
-              <div className="space-y-1.5">
-                <p className="text-2xl font-medium tracking-tight text-ink">
-                  Hi, I&apos;m Jeffy.
-                </p>
-                <p className="text-[15px] text-ink-muted">
-                  Ask me anything.
-                </p>
-              </div>
-              <div className="flex w-full flex-col items-center gap-2">
-                {SUGGESTIONS.map((s) => (
-                  <PromptSuggestion key={s} onClick={() => ask(s)}>
-                    {s}
-                  </PromptSuggestion>
-                ))}
+    <SidebarProvider className="h-dvh min-h-0 overflow-hidden">
+      <ChatSidebar
+        conversations={conversations}
+        activeId={activeId}
+        runningId={running?.convId ?? null}
+        onSelect={(id) => {
+          setActiveId(id);
+          setCategory(null);
+        }}
+        onNew={newChat}
+        onDelete={deleteChat}
+      />
+      <SidebarInset className="jeffy-main relative h-dvh min-h-0 min-w-0 overflow-hidden">
+        <FileUpload onFilesAdded={(f) => void addFiles(f)} accept={ACCEPT} disabled={talkOpen}>
+          <FileUploadContent className="bg-background/70">
+            <div className="jeffy-drop flex flex-col items-center gap-3 rounded-3xl border border-dashed px-14 py-12 text-center">
+              <ImageUp className="text-primary size-8" aria-hidden />
+              <p className="text-lg font-medium">Drop files to attach</p>
+              <p className="text-muted-foreground text-sm">Images, PDF, text or markdown · up to 4 files, 3 MB</p>
+            </div>
+          </FileUploadContent>
+
+          <header className="relative z-20 flex h-14 shrink-0 items-center gap-2 px-3 sm:px-4">
+            <SidebarTrigger aria-label="Toggle sidebar" className="text-muted-foreground hover:text-foreground size-9" />
+            <h1 className="min-w-0 truncate text-[15px] font-medium tracking-tight">
+              {active ? active.title : <span className="text-muted-foreground">New chat</span>}
+            </h1>
+            <div className="ml-auto flex items-center gap-1.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-pressed={voice}
+                    aria-label={voice ? "Voice replies on" : "Voice replies off"}
+                    onClick={() => toggleVoice(!voice)}
+                    className={cn(
+                      "size-9 rounded-full",
+                      voice ? "text-primary bg-primary/10 hover:bg-primary/15" : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {voice ? <Volume2 className="size-[18px]" /> : <VolumeX className="size-[18px]" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{voice ? "Voice replies on" : "Speak replies out loud"}</TooltipContent>
+              </Tooltip>
+              <Button
+                ref={talkButton}
+                variant="outline"
+                aria-label="Talk to Jeffy"
+                onClick={() => {
+                  engine.unlock();
+                  setTalkOpen(true);
+                }}
+                className="h-9 gap-2 rounded-full px-3.5 text-[13px]"
+              >
+                <AudioLines className="size-4" />
+                Talk
+              </Button>
+            </div>
+          </header>
+
+          {empty ? (
+            <div className="jeffy-hero relative flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-4">
+              <div className="flex w-full max-w-2xl flex-1 flex-col items-center justify-center gap-8 pt-[4vh] pb-[12vh]">
+                <Greeting text={greeting} />
+                {composer}
+                <div className="min-h-40 w-full">
+                  <Suggestions
+                    draft={draft}
+                    category={category}
+                    onCategory={setCategory}
+                    onPick={(p) => {
+                      setDraft(p);
+                      setCategory(null);
+                      focusComposer();
+                    }}
+                  />
+                </div>
               </div>
             </div>
+          ) : (
+            <>
+              <ChatContainerRoot className="relative min-h-0 flex-1">
+                <ChatContainerContent className="mx-auto w-full max-w-3xl gap-10 px-4 pt-4 pb-12 sm:px-6">
+                  {turns.map((t, i) => (
+                    <TurnView
+                      key={t.id}
+                      turn={t}
+                      engine={engine}
+                      busy={!!running}
+                      isLast={i === turns.length - 1}
+                      searchRequested={running?.turnId === t.id && running.search}
+                      onRegenerate={() => ask(t.question, { replaceId: t.id })}
+                      onEdit={() => {
+                        setDraft(t.question);
+                        focusComposer();
+                      }}
+                      onStop={stop}
+                      onFeedback={(f) => active && patch(active.id, t.id, (x) => ({ ...x, feedback: f }))}
+                      onPlaying={onPlaying}
+                      onVoiceFailed={() =>
+                        active &&
+                        patch(active.id, t.id, (x) => ({
+                          ...x,
+                          voice: { status: "error", message: "This reply couldn't play." },
+                        }))
+                      }
+                    />
+                  ))}
+                  <ChatContainerScrollAnchor />
+                </ChatContainerContent>
+                <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+                  <ScrollButton
+                    aria-label="Scroll to latest"
+                    className="bg-card/90 pointer-events-auto shadow-lg backdrop-blur"
+                  />
+                </div>
+              </ChatContainerRoot>
+              <div className="jeffy-dock relative z-10 shrink-0 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
+                <div className="mx-auto w-full max-w-3xl">
+                  {composer}
+                  <p className="text-muted-foreground/70 mt-2 text-center text-[11px]">
+                    Jeffy can make mistakes. Check important info.
+                  </p>
+                </div>
+              </div>
+            </>
           )}
-          {turns.map((t) => (
-            <TurnView
-              key={t.id}
-              turn={t}
-              busy={running}
-              engine={engine}
-              onRegenerate={() => ask(t.question, { replaceId: t.id })}
-              onPlaying={onPlaying}
-              onVoiceFailed={() =>
-                patch(t.id, (x) => ({
-                  ...x,
-                  voice: { status: "error", message: "This reply couldn't play." },
-                }))
-              }
-            />
-          ))}
-          <ChatContainerScrollAnchor />
-        </ChatContainerContent>
-        <div className="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">
-          <ScrollButton className="pointer-events-auto" />
-        </div>
-      </ChatContainerRoot>
-      <div className="shrink-0 px-4 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-        <PromptInput
-          value={draft}
-          onValueChange={setDraft}
-          onSubmit={send}
-          className="flex items-end gap-1 rounded-3xl border-line bg-raised p-1.5 pl-3 shadow-none transition-colors has-[:focus-visible]:border-glow/60"
-        >
-          <PromptInputTextarea
-            placeholder="Ask Jeffy something…"
-            aria-label="Your question"
-            maxLength={MAX_QUESTION_CHARS}
-            className="min-h-11 flex-1 px-1 py-2.5 !text-base text-ink placeholder:text-ink-muted focus-visible:!outline-none focus-visible:!ring-0"
-          />
-          <PromptInputActions>
-            {near && (
-              <span className="text-xs tabular-nums text-ink-muted" aria-live="polite">
-                {draft.length}/{MAX_QUESTION_CHARS}
-              </span>
-            )}
-            <button
-              ref={talkButton}
-              type="button"
-              aria-label="Talk to Jeffy"
-              onClick={(e) => {
-                e.stopPropagation();
-                engine.unlock();
-                setTalkOpen(true);
-              }}
-              className="inline-flex size-11 shrink-0 items-center justify-center rounded-full text-ink transition-[background-color,transform] duration-150 ease-out hover:bg-surface active:scale-95"
-            >
-              <WaveformIcon />
-            </button>
-            {running ? (
-              <button
-                type="button"
-                aria-label="Stop answering"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  abort.current?.abort();
-                  engine.stop();
-                }}
-                className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-surface text-ink transition-[background-color,transform] duration-150 ease-out hover:bg-track active:scale-95"
-              >
-                <StopIcon />
-              </button>
-            ) : (
-              <button
-                type="button"
-                aria-label="Send question"
-                disabled={!canSend}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  send();
-                }}
-                className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-cobalt text-white transition-[background-color,opacity,transform] duration-150 ease-out hover:bg-cobalt-press active:scale-95 disabled:opacity-40"
-              >
-                <SendIcon />
-              </button>
-            )}
-          </PromptInputActions>
-        </PromptInput>
-      </div>
+        </FileUpload>
+      </SidebarInset>
       {talkOpen && (
         <TalkView
           engine={engine}
           turns={turns}
           onUtterance={(text) => ask(text, { mode: "talk" })}
-          onInterrupt={() => {
-            abort.current?.abort();
-            engine.stop();
-          }}
+          onInterrupt={stop}
           onClose={() => {
-            abort.current?.abort();
-            engine.stop();
+            stop();
             setTalkOpen(false);
             requestAnimationFrame(() => talkButton.current?.focus());
           }}
         />
       )}
-    </>
+    </SidebarProvider>
   );
 }
